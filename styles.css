@@ -223,21 +223,8 @@ body {
   transition: all 0.2s ease-out;
 }
 
-/* 천천히 바운스 애니메이션 */
-@keyframes slow-bounce {
-  0%, 100% {
-    transform: translateX(-50%) translateY(0);
-  }
-  50% {
-    transform: translateX(-50%) translateY(-8px);
-  }
-}
-
-/* Done 상태일 때 말풍선 바운스 */
-.state-complete .speech-bubble,
-.state-Stop .speech-bubble {
-  animation: slow-bounce 1.5s ease-in-out infinite;
-}
+/* 바운스 애니메이션 제거 */
+/* 메시지가 깜빡거리는 문제 해결을 위해 제거 */
 
 .speech-bubble::before {
   content: '';

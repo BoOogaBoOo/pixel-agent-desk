@@ -4,6 +4,8 @@ const speechBubble = document.getElementById('speech-bubble');
 // 워킹 시간 관련 변수
 let workingStartTime = null;
 let workingTimer = null;
+let isWorkingState = false;
+let finalWorkingTime = null; // 최종 워킹 시간 저장
 
 // 상태 설정 통합 (클래스 + 라벨)
 const stateConfig = {
@@ -30,11 +32,19 @@ function updateState(state, message) {
   if (workingStates.includes(state)) {
     if (!workingStartTime) {
       workingStartTime = Date.now();
+      isWorkingState = true;
       startWorkingTimer();
+      // 워킹 상태 시작 시 첫 텍스트 설정
+      speechBubble.textContent = 'Working...';
     }
   } else {
+    // 워킹 상태가 끝날 때 최종 시간 저장
+    if (isWorkingState && workingStartTime) {
+      finalWorkingTime = Math.floor((Date.now() - workingStartTime) / 1000);
+    }
     stopWorkingTimer();
     workingStartTime = null;
+    isWorkingState = false;
   }
 
   // 이전 상태 클래스 제거
@@ -44,17 +54,26 @@ function updateState(state, message) {
   const config = stateConfig[state] || stateConfig['Complete'];
   container.classList.add(config.class);
 
-  // 말풍선 업데이트
-  speechBubble.textContent = message || config.label;
+  // Done 상태일 때 최종 시간 표시
+  if (state === 'Stop' || state === 'Complete') {
+    if (finalWorkingTime && finalWorkingTime > 0) {
+      speechBubble.textContent = `Done! (${formatWorkingTime(finalWorkingTime)})`;
+    } else {
+      speechBubble.textContent = 'Done!';
+    }
+  } else if (!isWorkingState) {
+    // 워킹 상태가 아닌 다른 상태일 때
+    speechBubble.textContent = config.label;
+  }
 }
 
 // 워킹 타이머 시작
 function startWorkingTimer() {
   workingTimer = setInterval(() => {
-    if (workingStartTime) {
+    if (workingStartTime && isWorkingState) {
       const elapsed = Date.now() - workingStartTime;
       const seconds = Math.floor(elapsed / 1000);
-      speechBubble.textContent = formatWorkingTime(seconds);
+      speechBubble.textContent = `Working... ${formatWorkingTime(seconds)}`;
     }
   }, 1000);
 }
@@ -69,14 +88,16 @@ function stopWorkingTimer() {
 
 // 워킹 시간 포맷팅
 function formatWorkingTime(seconds) {
-  if (seconds < 10) {
-    return `Working... ${seconds}초`;
+  if (seconds === 0) {
+    return '';
+  } else if (seconds < 10) {
+    return `${seconds}초`;
   } else if (seconds < 60) {
-    return `Working... ${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+    return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
   } else {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
-    return `Working... ${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   }
 }
 
