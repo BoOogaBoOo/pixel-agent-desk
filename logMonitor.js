@@ -19,9 +19,7 @@ class LogMonitor {
     this.processWatcher = new ProcessWatcher();
     this.watchedFiles = new Map(); // filePath -> { watcher, lastSize, pendingBuffer }
     this.scanIntervalHandle = null;
-    this.processCheckInterval = null;
     this.scanInterval = 5000; // Scan for NEW files every 5 seconds
-    this.processCheckInterval = 3000; // Check processes every 3 seconds
   }
 
   /**
@@ -55,9 +53,9 @@ class LogMonitor {
   }
 
   /**
-   * P0-2: Initial tail read — collect all entries, send only last state per session
+   * Initial tail read — collect all entries, send only last state per session
    */
-  initialReadAndWatch(fileInfo) {
+  async initialReadAndWatch(fileInfo) {
     const filePath = fileInfo.path;
     const projectPath = fileInfo.project;
     const RECENT_MS = 30 * 60 * 1000;
@@ -79,13 +77,27 @@ class LogMonitor {
         const textContent = this.parser.extractTextContent(entry);
 
         // Always overwrite — last entry wins (most recent state per session)
-        lastBySession.set(sessionKey, { ...entry, state, thinkingTime, textContent, projectPath });
+        if (entry.subtype === 'SessionEnd') {
+          // 세션 종료 이벤트 → 이미 등록된 경우 제거, 신규면 추가 안 함
+          lastBySession.delete(sessionKey);
+          continue;
+        }
+
+        lastBySession.set(sessionKey, {
+          ...entry,
+          state,
+          thinkingTime,
+          textContent,
+          projectPath,
+          jsonlPath: filePath,
+          startTime: fileInfo.mtime ? new Date(fileInfo.mtime) : new Date()
+        });
       }
 
       // Reflect actual state from logs
       for (const [, agentData] of lastBySession) {
         if (agentData.state) {
-          this.agentManager.updateAgent({ ...agentData, state: agentData.state }, 'log_initial');
+          this.agentManager.updateAgent(agentData, 'log_initial');
         }
       }
 
@@ -176,6 +188,14 @@ class LogMonitor {
         const entry = this.parser.parseLine(line);
         if (!entry) continue;
         if (!entry.sessionId && !entry.agentId) continue;
+
+        // SessionEnd 감지 → 즉시 에이전트 제거
+        if (entry.subtype === 'SessionEnd') {
+          const agentId = entry.sessionId || entry.agentId;
+          console.log(`[LogMonitor] SessionEnd detected for ${agentId?.slice(0, 8)}, removing agent`);
+          this.agentManager.removeAgent(agentId);
+          continue;
+        }
 
         const state = this.parser.determineState(entry);
         const thinkingTime = this.parser.extractThinkingTime(entry);

@@ -12,14 +12,15 @@ const { formatSlugToDisplayName, safeStatSync, safeExistsSync } = require('./uti
 
 class JsonlParser {
   constructor() {
-    // 4-stage state system
+    // State system
     this.STATES = {
       WORKING: 'Working',
       THINKING: 'Thinking', // 고민 중
       DONE: 'Done',         // 완료
       ERROR: 'Error',
       HELP: 'Help',         // 알림/도구권한/텍스트응답
-      OFFLINE: 'Offline'
+      OFFLINE: 'Offline',
+      WAITING: 'Waiting'    // 대기 중 (앉아 있는 포즈)
     };
   }
 
@@ -88,10 +89,10 @@ class JsonlParser {
       return this.STATES.WORKING;
     }
 
-    // 초기/종료 상태만 Done
+    // 초기/종료 상태는 Waiting (앉아 있는 포즈)
     if (subtype && ['SessionStart', 'Idle', 'SessionEnd'].includes(subtype)) {
-      console.log(`[JsonlParser] -> DONE (subtype=${subtype})`);
-      return this.STATES.DONE;
+      console.log(`[JsonlParser] -> WAITING (subtype=${subtype})`);
+      return this.STATES.WAITING;
     }
 
     // 그 외는 Working 기본값
