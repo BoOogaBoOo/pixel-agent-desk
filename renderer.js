@@ -239,32 +239,24 @@ function createAgentCard(agent) {
 
   let pokeTimeout = null;
   card.onclick = () => {
-    // 이미 찔린 상태면 무시
-    if (pokeTimeout) return;
+    // 1. 터미널 포커스 호출 (실제 PID 활용)
+    if (window.electronAPI && window.electronAPI.focusTerminal) {
+      window.electronAPI.focusTerminal(agent.id);
+    }
 
-    // 원래 상태 백업
+    // 2. 찌르기 반응 (시각적 피드백)
+    if (pokeTimeout) return;
     const originalText = bubble.textContent;
     const originalBorder = bubble.style.borderColor;
 
-    // 찌르기 반응
     const randomMsg = pokeMessages[Math.floor(Math.random() * pokeMessages.length)];
     bubble.textContent = randomMsg;
-    bubble.style.borderColor = '#ff4081'; // 핑크색 테두리로 깜짝 놀람 표현
+    bubble.style.borderColor = '#ff4081';
 
-    // 2초 후 원래 상태로 복구
     pokeTimeout = setTimeout(() => {
-      // 그 사이 에이전트 상태가 업데이트 되었을 수 있으므로 강제 복구 대신
-      // UI 업데이트 함수가 자연스럽게 덮어쓰도록 유도
       bubble.style.borderColor = '';
       pokeTimeout = null;
-      // 상태 재반영을 위해 DOM 속성 이용하여 복원
-      const currentAgent = document.querySelector(`.agent-card[data-agent-id="${agent.id}"]`);
-      if (currentAgent) {
-        const stateTag = currentAgent.dataset.state;
-        const stateConf = stateConfig[Object.keys(stateConfig).find(k => stateConfig[k].anim === stateTag)] || stateConfig['Working'];
-        // renderer.js의 updateAgentUI가 다음 업데이트때 알아서 고치겠지만, 혹시나 해서 일단 원래 라벨로.
-        bubble.textContent = originalText;
-      }
+      bubble.textContent = originalText;
     }, 2000);
   };
 

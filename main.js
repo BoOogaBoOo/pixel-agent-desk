@@ -117,7 +117,7 @@ function setupClaudeHooks() {
     const hookScript = path.join(__dirname, 'hook.js').replace(/\\/g, '/');
     const hookCmd = `node "${hookScript}"`;
 
-    // command 훅으로 모든 이벤트를 hook.js로 전달
+    // command 훅으로 모든 이벤트를 hook.js로 전달 (공식 가이드 기준 전체 확장)
     const HOOK_EVENTS = [
       'SessionStart', 'SessionEnd',
       'UserPromptSubmit',           // 사용자 메시지 제출 → Working
@@ -126,6 +126,8 @@ function setupClaudeHooks() {
       'TaskCompleted',
       'PermissionRequest', 'Notification',
       'SubagentStart', 'SubagentStop',
+      'TeammateIdle',               // 에이전트 팀 멤버 대기 중 → Waiting
+      'ConfigChange', 'WorktreeCreate', 'WorktreeRemove', 'PreCompact' // 기타 이벤트
     ];
 
     for (const eventName of HOOK_EVENTS) {
@@ -282,6 +284,22 @@ function startHookServer() {
             if (subId) handleSessionEnd(subId);
             break;
           }
+
+          case 'TeammateIdle': {
+            // 에이전트 팀 멤버가 작업을 멈추고 기다리는 중 -> Waiting
+            if (agentManager) {
+              const agent = agentManager.getAgent(sessionId);
+              if (agent) agentManager.updateAgent({ ...agent, state: 'Waiting' }, 'hook');
+            }
+            break;
+          }
+
+          case 'ConfigChange':
+          case 'WorktreeCreate':
+          case 'WorktreeRemove':
+          case 'PreCompact':
+            debugLog(`[Hook] Meta info: ${event} for ${sessionId.slice(0, 8)}`);
+            break;
 
           default:
             debugLog(`[Hook] Unknown: ${event} — ${JSON.stringify(data).slice(0, 150)}`);
@@ -495,26 +513,34 @@ function handleSessionEnd(sessionId) {
 
 app.whenReady().then(() => {
   debugLog('Pixel Agent Desk started');
+
+  // 1. 에이전트 매니저 즉시 시작 (UI 뜨기 전부터 데이터 수집)
+  agentManager = new AgentManager();
+  agentManager.start();
+
+  // 2. 백그라운드 서비스 시작
   startHookServer();       // HTTP 훅 서버
   setupClaudeHooks();      // settings.json 훅 자동 등록
-  startLivenessChecker();  // 죽기적 생사 확인 (15초)
+  startLivenessChecker();  // 프로세스 생사 확인
+
+  // 3. 앱 재시작 시 기존 활성 세션 복구 시작
+  recoverExistingSessions();
+
+  // 4. 테스트용 서브 에이전트 (개발 중 상시 확인용)
+  const testSubagents = [
+    { sessionId: 'test-backend', projectPath: 'E:/test/backend', displayName: 'Backend Helper', state: 'Working', isSubagent: true },
+    { sessionId: 'test-qa', projectPath: 'E:/test/qa', displayName: 'QA Bot', state: 'Done', isSubagent: true }
+  ];
+  testSubagents.forEach(agent => agentManager.updateAgent(agent, 'test'));
+
+  // 5. UI 생성
   createWindow();
 
-
+  // Renderer가 준비되면 현재 상태 전송
   ipcMain.once('renderer-ready', () => {
     debugLog('[Main] renderer-ready event received!');
 
-    agentManager = new AgentManager();
-    agentManager.start();
-    debugLog('[Main] AgentManager started');
-
-    // agentManager 준비 전에 도착한 SessionStart 처리
-    while (pendingSessionStarts.length > 0) {
-      const { sessionId, cwd } = pendingSessionStarts.shift();
-      handleSessionStart(sessionId, cwd);
-    }
-
-    // 에이전트 이벤트 → renderer IPC 전달 + 동적 리사이징
+    // 에이전트 매니저 이벤트 연결 (이미 생성된 상태이므로 여기서 연결)
     agentManager.on('agent-added', (agent) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('agent-added', agent);
@@ -535,33 +561,26 @@ app.whenReady().then(() => {
       }
     });
 
-    agentManager.on('agents-cleaned', (data) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('agents-cleaned', data);
-        resizeWindowForAgents(agentManager.getAgentCount());
-      }
-    });
+    // 준비 전에 도착했던 SessionStart 처리
+    while (pendingSessionStarts.length > 0) {
+      const { sessionId, cwd } = pendingSessionStarts.shift();
+      handleSessionStart(sessionId, cwd);
+    }
+  });
 
-    logMonitor = null; // 레거시 (no-op)
-
-    // 앱 재시작 시 기존 활성 세션 복구 (1회)
-    recoverExistingSessions();
-
-    // 좌비 에이전트 방지: lastActivity 기준 30분 미활성 시 제거
-    const INACTIVE_MS = 30 * 60 * 1000;
-    function checkInactiveAgents() {
-      if (!agentManager) return;
-      const now = Date.now();
-      for (const agent of agentManager.getAllAgents()) {
-        const age = now - (agent.lastActivity || agent.firstSeen || 0);
-        if (age > INACTIVE_MS) {
-          debugLog(`[Main] Agent '${agent.displayName}' inactive ${Math.round(age / 60000)}min → removing`);
-          agentManager.removeAgent(agent.id);
-        }
+  // 좌비 에이전트 방지 (30분 미활성)
+  const INACTIVE_MS = 30 * 60 * 1000;
+  setInterval(() => {
+    if (!agentManager) return;
+    const now = Date.now();
+    for (const agent of agentManager.getAllAgents()) {
+      const age = now - (agent.lastActivity || agent.firstSeen || 0);
+      if (age > INACTIVE_MS) {
+        debugLog(`[Main] Inactive removal: ${agent.displayName}`);
+        agentManager.removeAgent(agent.id);
       }
     }
-    setInterval(() => checkInactiveAgents(), 5 * 60 * 1000);
-  });
+  }, 5 * 60 * 1000);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -600,4 +619,38 @@ ipcMain.on('get-agent-stats', (event) => event.reply('agent-stats-response', age
 // 에이전트 수동 퇴근 IPC 핸들러
 ipcMain.on('dismiss-agent', (event, agentId) => {
   if (agentManager) agentManager.dismissAgent(agentId);
+});
+
+// 터미널 포커스 IPC 핸들러 (실제 PID 활용)
+ipcMain.on('focus-terminal', (event, agentId) => {
+  const pid = sessionPids.get(agentId);
+  if (!pid) return;
+
+  debugLog(`[Main] Focus requested for agent=${agentId.slice(0, 8)} pid=${pid}`);
+
+  // PowerShell을 사용하여 해당 PID를 소유한 창을 최상단으로 올림
+  const { exec } = require('child_process');
+  const psCmd = `
+    $targetPid = ${pid};
+    $wshell = New-Object -ComObject WScript.Shell;
+    $proc = Get-Process -Id $targetPid -ErrorAction SilentlyContinue;
+    if ($proc) {
+      $hwnd = $proc.MainWindowHandle;
+      if ($hwnd -eq 0) {
+        # MainWindowHandle이 없는 경우 부모/자식 관계 탐색 (터미널 쉘 특성)
+        $parent = Get-CimInstance Win32_Process -Filter "ProcessId = $targetPid" | Select-Object -ExpandProperty ParentProcessId;
+        $proc = Get-Process -Id $parent -ErrorAction SilentlyContinue;
+        $hwnd = $proc.MainWindowHandle;
+      }
+      if ($hwnd -ne 0) {
+        $type = "[DllImport(\\"user32.dll\\")] public static extern bool SetForegroundWindow(IntPtr hWnd);";
+        Add-Type -MemberDefinition $type -Name "Win32Utils" -Namespace "Win32";
+        [Win32.Win32Utils]::SetForegroundWindow($hwnd);
+      }
+    }
+  `.replace(/\n/g, ' ');
+
+  exec(`powershell.exe -NoProfile -Command "${psCmd}"`, (err) => {
+    if (err) debugLog(`[Main] Focus error: ${err.message}`);
+  });
 });
