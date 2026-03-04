@@ -51,21 +51,6 @@ class AgentManager extends EventEmitter {
     let newState = entry.state;
     if (!newState) newState = prevState || 'Done';
 
-    // 훅(http/hook)으로 관리 중인 에이전트는 LogMonitor(log)가 Working으로 덮어쓰지 않음
-    // 단, jsonlPath 보충 / Done·Error 전환 / 신규 등록은 허용
-    if (existingAgent && source === 'log') {
-      const isHookManaged = existingAgent.source === 'http' || existingAgent.source === 'hook';
-      const isWorkingOverride = newState === 'Working' || newState === 'Thinking';
-      if (isHookManaged && isWorkingOverride) {
-        // jsonlPath만 보충하고 상태는 건드리지 않음
-        if (!existingAgent.jsonlPath && entry.jsonlPath) {
-          existingAgent.jsonlPath = entry.jsonlPath;
-          this.agents.set(agentId, existingAgent);
-        }
-        return existingAgent;
-      }
-    }
-
     let activeStartTime = existingAgent ? existingAgent.activeStartTime : now;
     let lastDuration = existingAgent ? existingAgent.lastDuration : 0;
 

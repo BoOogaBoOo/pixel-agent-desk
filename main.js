@@ -2,7 +2,6 @@ const { app, BrowserWindow, ipcMain, screen } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
-const LogMonitor = require('./logMonitor');
 const AgentManager = require('./agentManager');
 
 // Debug logging to file
@@ -14,7 +13,6 @@ const debugLog = (msg) => {
 };
 
 let mainWindow;
-let logMonitor = null;
 let agentManager = null;
 
 // =====================================================
@@ -289,78 +287,12 @@ function handleSessionEnd(sessionId) {
   }
 }
 
-function startProcessScanner() {
-  const { execFile } = require('child_process');
-  const SCAN_INTERVAL = 5000;
-  const GRACE_PERIOD_MS = 15000;  // 등록 후 15초는 스캔 제외
-  const MAX_ABSENT = 3;           // 3회 연속 미발견 시 DEAD
-  const absentCounts = new Map();
 
-  function scanClaudeProcesses(callback) {
-    const psCmd = `Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*claude-code*cli.js*' } | ForEach-Object { $_.ProcessId }`;
-    execFile('powershell.exe', ['-NoProfile', '-Command', psCmd], { timeout: 8000 }, (err, stdout) => {
-      if (err) { debugLog(`[Scan] Error: ${err.message}`); callback([]); return; }
-      const pids = stdout.trim().split('\n').map(l => parseInt(l.trim(), 10)).filter(p => p > 0);
-      callback(pids);
-    });
-  }
-
-  setInterval(() => {
-    if (!agentManager) return;
-    const agents = agentManager.getAllAgents();
-    if (agents.length === 0) return;
-
-    scanClaudeProcesses((livePids) => {
-      debugLog(`[Scan] ${livePids.length} proc(s), ${agents.length} agent(s)`);
-
-      // Grace Period 내 에이전트는 체크 제외
-      const checkable = agents.filter(a => {
-        if (a.firstSeen && Date.now() - a.firstSeen < GRACE_PERIOD_MS) {
-          absentCounts.delete(a.id); return false;
-        }
-        return true;
-      });
-      if (checkable.length === 0) return;
-
-      // 프로세스 수 ≥ 에이전트 수 → 모두 살아있음
-      if (livePids.length >= checkable.length) {
-        for (const a of checkable) absentCounts.delete(a.id);
-        return;
-      }
-
-      // 초과 에이전트: jsonlPath mtime 기준으로 가장 오래된 것부터 suspect
-      const excessCount = checkable.length - livePids.length;
-      const withMtime = checkable.map(a => {
-        let mtime = 0;
-        try { if (a.jsonlPath) mtime = fs.statSync(a.jsonlPath).mtimeMs; } catch (e) { }
-        return { agent: a, mtime };
-      }).sort((a, b) => a.mtime - b.mtime);
-
-      for (const { agent } of withMtime.slice(excessCount)) absentCounts.delete(agent.id);
-
-      for (const { agent } of withMtime.slice(0, excessCount)) {
-        const count = (absentCounts.get(agent.id) || 0) + 1;
-        absentCounts.set(agent.id, count);
-        if (count < MAX_ABSENT) {
-          debugLog(`[Scan] Agent ${agent.id.slice(0, 8)} suspect ${count}/${MAX_ABSENT}`);
-          continue;
-        }
-        debugLog(`[Scan] Agent ${agent.id.slice(0, 8)} DEAD after ${count} scans`);
-        absentCounts.delete(agent.id);
-        if (agent.jsonlPath && fs.existsSync(agent.jsonlPath)) {
-          try { fs.appendFileSync(agent.jsonlPath, JSON.stringify({ type: 'system', subtype: 'SessionEnd', sessionId: agent.id, timestamp: new Date().toISOString() }) + '\n'); } catch (e) { }
-        }
-        agentManager.removeAgent(agent.id);
-      }
-    });
-  }, SCAN_INTERVAL);
-}
 
 app.whenReady().then(() => {
   debugLog('Pixel Agent Desk started');
-  startHookServer();       // HTTP 훅 서버 먼저 시작
-  setupClaudeHooks();      // 훅 설정 등록
-  startProcessScanner();   // 강제 종료 백업 스캔
+  startHookServer();    // HTTP 훅 서버
+  setupClaudeHooks();   // settings.json 훅 자동 등록
   createWindow();
 
 
@@ -405,47 +337,21 @@ app.whenReady().then(() => {
       }
     });
 
-    logMonitor = new LogMonitor(agentManager);
-    debugLog('[Main] Starting LogMonitor...');
-    logMonitor.start();
-    debugLog('[Main] LogMonitor started');
+    logMonitor = null; // 레거시 제거 (no-op)
 
-    // =====================================================
-    // 비활성 에이전트 정리: JSONL mtime 기반 (P3-Active)
-    // Claude가 실행 중이면 로그 파일이 계속 갱신됨
-    // 30분 이상 로그 변경이 없으면 비활성으로 간주 → 제거
-    // =====================================================
-    const INACTIVE_MS = 30 * 60 * 1000; // 30분
-
+    // 좌비 에이전트 방지: lastActivity 기준 30분 미활성 시 제거
+    const INACTIVE_MS = 30 * 60 * 1000;
     function checkInactiveAgents() {
-      if (!agentManager || !logMonitor) return;
+      if (!agentManager) return;
       const now = Date.now();
-      const agents = agentManager.getAllAgents();
-
-      for (const agent of agents) {
-        if (!agent.jsonlPath) continue;
-
-        try {
-          const stat = require('fs').statSync(agent.jsonlPath);
-          const mtime = stat.mtimeMs;
-          const age = now - mtime;
-
-          if (age > INACTIVE_MS) {
-            debugLog(`[Main] Agent '${agent.displayName}' inactive for ${Math.round(age / 60000)}min, removing...`);
-            agentManager.removeAgent(agent.id);
-          }
-        } catch (e) {
-          // 파일이 없어진 경우도 제거
-          debugLog(`[Main] Agent '${agent.displayName}' jsonl missing, removing...`);
+      for (const agent of agentManager.getAllAgents()) {
+        const age = now - (agent.lastActivity || agent.firstSeen || 0);
+        if (age > INACTIVE_MS) {
+          debugLog(`[Main] Agent '${agent.displayName}' inactive ${Math.round(age / 60000)}min → removing`);
           agentManager.removeAgent(agent.id);
         }
       }
     }
-
-    // 시작 5분 후 첫 체크 (앱 시작 직후엔 로그가 오래됐을 수 있음)
-    setTimeout(() => checkInactiveAgents(), 5 * 60 * 1000);
-
-    // 이후 5분마다 주기적 체크
     setInterval(() => checkInactiveAgents(), 5 * 60 * 1000);
   });
 
@@ -455,13 +361,11 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  if (logMonitor) logMonitor.stop();
   if (agentManager) agentManager.stop();
   if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('before-quit', () => {
-  if (logMonitor) logMonitor.stop();
   if (agentManager) agentManager.stop();
 });
 
