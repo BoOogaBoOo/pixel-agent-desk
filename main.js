@@ -222,7 +222,18 @@ function startHookServer() {
             firstPreToolUseDone.delete(sessionId);
             if (agentManager) {
               const agent = agentManager.getAgent(sessionId);
-              if (agent) agentManager.updateAgent({ ...agent, sessionId, state: 'Working' }, 'hook');
+              if (agent) {
+                agentManager.updateAgent({ ...agent, sessionId, state: 'Working' }, 'hook');
+              } else {
+                // 복구에 실패했거나 30분 지나서 삭제된 경우, 다시 훅이 오면 새 세션으로 생성
+                debugLog(`[Hook] auto-creating agent for existing session: ${sessionId.slice(0, 8)}`);
+                handleSessionStart(sessionId, data.cwd || '');
+                // 생성 직후 상태 업데이트를 위해 다시 가져옴
+                setTimeout(() => {
+                  const newAgent = agentManager.getAgent(sessionId);
+                  if (newAgent) agentManager.updateAgent({ ...newAgent, state: 'Working' }, 'hook');
+                }, 100);
+              }
             }
             break;
 
@@ -233,7 +244,11 @@ function startHookServer() {
             firstPreToolUseDone.delete(sessionId);
             if (agentManager) {
               const agent = agentManager.getAgent(sessionId);
-              if (agent) agentManager.updateAgent({ ...agent, sessionId, state: 'Done' }, 'hook');
+              if (agent) {
+                agentManager.updateAgent({ ...agent, sessionId, state: 'Done' }, 'hook');
+              } else {
+                handleSessionStart(sessionId, data.cwd || '');
+              }
             }
             break;
 
