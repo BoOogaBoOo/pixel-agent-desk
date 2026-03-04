@@ -19,16 +19,24 @@ let agentManager = null;
 // 에이전트 수에 따른 동적 윈도우 크기 (P1-6)
 // =====================================================
 function getWindowSizeForAgents(count) {
-  if (count <= 1) return { width: 220, height: 200 };
+  if (count <= 1) return { width: 220, height: 210 };
 
-  // 멀티 에이전트: 카드 90px × N + 갭 + 외부 패딩
+  // 멀티 에이전트: 바탕 여백(OUTER) 넉넉히 부여하여 DPI 스케일링에서 카드 잘림/줄바꿈 혼선 방지 (20 -> 36)
   const CARD_W = 90;
   const GAP = 10;
-  const OUTER = 20;
-  const HEIGHT = 195;
+  const OUTER = 40;
+  const ROW_H = 160; // 추가되는 행당 높이 여유분
+  const BASE_H = 210; // 첫 번째 행(기본) 최소 높이
 
-  const width = Math.max(220, count * CARD_W + (count - 1) * GAP + OUTER);
-  return { width, height: HEIGHT };
+  // 한 줄에 최대 5명까지만 배치, 그 이상은 줄바꿈 처리하여 높이 확장
+  const maxCols = 5;
+  const cols = Math.min(count, maxCols);
+  const rows = Math.ceil(count / maxCols);
+
+  const width = Math.max(220, cols * CARD_W + (cols - 1) * GAP + OUTER);
+  const height = BASE_H + (rows - 1) * ROW_H;
+
+  return { width, height };
 }
 
 function resizeWindowForAgents(count) {
