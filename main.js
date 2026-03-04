@@ -203,12 +203,6 @@ function startHookServer() {
         const sessionId = data.session_id || data.sessionId;
         if (!sessionId) return;
 
-        // 훅에 담긴 PID(claude 프로세스)로 sessionPids 매핑을 자동 힐링 및 보정
-        if (data._pid && (!sessionPids.has(sessionId) || sessionPids.get(sessionId) !== data._pid)) {
-          sessionPids.set(sessionId, data._pid);
-          debugLog(`[Hook] PID recorded dynamically: ${sessionId.slice(0, 8)} -> pid=${data._pid}`);
-        }
-
         debugLog(`[Hook] ${event} session=${sessionId.slice(0, 8)}`);
 
         switch (event) {
@@ -381,10 +375,8 @@ function recoverExistingSessions() {
       // 3. 복구된 세션 등록
       for (let i = 0; i < recoveredSessions.length; i++) {
         const { sessionId, cwd, filePath } = recoveredSessions[i];
-        const pid = livePids[i];
 
         const displayName = cwd ? require('path').basename(cwd) : 'Agent';
-        sessionPids.set(sessionId, pid);
 
         // 중요: 기존 세션은 초기화가 끝났으므로 UserPromptSubmit 전 1회 무시 로직을 우회하도록 설정
         firstPreToolUseDone.set(sessionId, true);
@@ -393,9 +385,9 @@ function recoverExistingSessions() {
         const recoveredAgent = agentManager.updateAgent({ sessionId, projectPath: cwd, displayName, state: 'Waiting', jsonlPath: filePath }, 'recover');
         if (recoveredAgent) recoveredAgent.firstSeen = Date.now() - 30000;
 
-        debugLog(`[Recover] Restored: ${sessionId.slice(0, 8)} (${displayName}) with PID=${pid}`);
+        debugLog(`[Recover] Restored: ${sessionId.slice(0, 8)} (${displayName})`);
       }
-      debugLog(`[Recover] Done — ${recoveredSessions.length} session(s) mapped to PIDs`);
+      debugLog(`[Recover] Done — ${recoveredSessions.length} session(s) recovered based on live processes`);
 
     } catch (e) {
       debugLog(`[Recover] Error: ${e.message}`);
@@ -404,63 +396,60 @@ function recoverExistingSessions() {
 }
 
 // =====================================================
-// 생사 확인: sessionId → pid 매핑, process.kill(pid, 0)으로 직접 확인
+// 생사 확인: claude 프로세스 개수 === 에이전트 개수 비교
 // =====================================================
-const sessionPids = new Map(); // sessionId → pid
-
 function startLivenessChecker() {
-  const INTERVAL = 3000;   // 3초마다 확인 (빠른 감지)
-  const GRACE_MS = 10000;  // 등록 직후 10초는 스킵 (클로드가 PID 발급받을 여유)
-  const MAX_MISS = 2;      // 2회 연속 실패 → DEAD
+  const { execFile } = require('child_process');
+  const INTERVAL = 3000;   // 3초마다 확인
+  const GRACE_MS = 10000;  // 등록 직후 10초는 스킵
+  const MAX_MISS = 2;      // 2회 연속 초과 시 DEAD
   const missCount = new Map();
+
+  const psCmd = `Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*claude*cli.js*' } | Measure-Object | Select-Object -ExpandProperty Count`;
 
   setInterval(() => {
     if (!agentManager) return;
-    for (const agent of agentManager.getAllAgents()) {
-      const pid = sessionPids.get(agent.id);
+    const agents = agentManager.getAllAgents();
+    if (agents.length === 0) { missCount.clear(); return; }
 
-      // PID 없음 (recover 등록 등): Grace 안이면 스킵
-      if (!pid) {
-        if (agent.firstSeen && Date.now() - agent.firstSeen < GRACE_MS) continue;
-        // PID 없는 에이전트는 일단 skip (훅으로 주시면 자동 등록됨)
-        continue;
+    execFile('powershell.exe', ['-NoProfile', '-Command', psCmd], { timeout: 8000 }, (err, stdout) => {
+      if (err) return;
+      const liveCount = parseInt(stdout.trim(), 10) || 0;
+
+      const checkable = agents.filter(a => !a.firstSeen || Date.now() - a.firstSeen >= GRACE_MS);
+      if (checkable.length === 0) return;
+
+      if (liveCount >= checkable.length) {
+        for (const a of checkable) missCount.delete(a.id);
+        return;
       }
 
-      // Grace 기간 제외
-      if (agent.firstSeen && Date.now() - agent.firstSeen < GRACE_MS) {
-        missCount.delete(agent.id);
-        continue;
-      }
+      const excess = checkable.length - liveCount;
+      const sorted = [...checkable].sort((a, b) => (a.lastActivity || 0) - (b.lastActivity || 0));
 
-      let alive = false;
-      try { process.kill(pid, 0); alive = true; } catch (e) { }
-
-      if (alive) {
-        missCount.delete(agent.id);
-      } else {
-        const n = (missCount.get(agent.id) || 0) + 1;
-        missCount.set(agent.id, n);
+      for (const a of sorted.slice(excess)) missCount.delete(a.id);
+      for (const a of sorted.slice(0, excess)) {
+        const n = (missCount.get(a.id) || 0) + 1;
+        missCount.set(a.id, n);
         if (n < MAX_MISS) {
-          debugLog(`[Live] ${agent.id.slice(0, 8)} pid=${pid} miss ${n}/${MAX_MISS}`);
+          debugLog(`[Live] ${a.id.slice(0, 8)} suspect ${n}/${MAX_MISS}`);
         } else {
-          debugLog(`[Live] ${agent.id.slice(0, 8)} pid=${pid} DEAD → removing`);
-          missCount.delete(agent.id);
-          sessionPids.delete(agent.id);
-          agentManager.removeAgent(agent.id);
+          debugLog(`[Live] ${a.id.slice(0, 8)} DEAD → removing`);
+          missCount.delete(a.id);
+          agentManager.removeAgent(a.id);
         }
       }
-    }
+    });
   }, INTERVAL);
 }
 
 
-function handleSessionStart(sessionId, cwd, pid) {
+function handleSessionStart(sessionId, cwd) {
   if (!agentManager) {
-    pendingSessionStarts.push({ sessionId, cwd, pid, ts: Date.now() });
+    pendingSessionStarts.push({ sessionId, cwd, ts: Date.now() });
     debugLog(`[Hook] SessionStart queued: ${sessionId.slice(0, 8)}`);
     return;
   }
-  if (pid) sessionPids.set(sessionId, pid);
   const displayName = cwd ? require('path').basename(cwd) : 'Agent';
   agentManager.updateAgent({
     sessionId,
@@ -473,7 +462,6 @@ function handleSessionStart(sessionId, cwd, pid) {
 }
 
 function handleSessionEnd(sessionId) {
-  sessionPids.delete(sessionId);           // PID 제거
   firstPreToolUseDone.delete(sessionId);   // 플래그 정리
   if (!agentManager) return;
   const agent = agentManager.getAgent(sessionId);
@@ -513,8 +501,8 @@ app.whenReady().then(() => {
 
     // agentManager 준비 전에 도착한 SessionStart 처리
     while (pendingSessionStarts.length > 0) {
-      const { sessionId, cwd, pid } = pendingSessionStarts.shift();
-      handleSessionStart(sessionId, cwd, pid);
+      const { sessionId, cwd } = pendingSessionStarts.shift();
+      handleSessionStart(sessionId, cwd);
     }
 
     // 에이전트 이벤트 → renderer IPC 전달 + 동적 리사이징
