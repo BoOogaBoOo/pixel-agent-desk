@@ -517,7 +517,7 @@ function updateGridLayout() {
 let resizeObserver = null;
 function requestDynamicResize() {
   if (!window.electronAPI || !window.electronAPI.resizeWindow) return;
-  const container = document.getElementById('agent-container');
+  const container = document.getElementById('agent-grid');
   if (container) {
     window.electronAPI.resizeWindow({ height: container.offsetHeight });
   }

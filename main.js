@@ -84,10 +84,14 @@ function getWindowSizeForAgents(agentsOrCount) {
 
 function resizeWindowForAgents(agentsOrCount) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  const { width, height } = getWindowSizeForAgents(agentsOrCount);
-  mainWindow.setSize(width, height);
+  const { width } = getWindowSizeForAgents(agentsOrCount);
+  const bounds = mainWindow.getBounds();
+  // Only adjust width here, height is managed by DOM observer
+  if (width !== bounds.width) {
+    mainWindow.setBounds({ ...bounds, width: width });
+  }
   const info = Array.isArray(agentsOrCount) ? agentsOrCount.length : agentsOrCount;
-  console.log(`[Main] Window → ${width}×${height} (${info} agents based layout)`);
+  console.log(`[Main] Window width → ${width} (${info} agents based layout)`);
 }
 
 // =====================================================

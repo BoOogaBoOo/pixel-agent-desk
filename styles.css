@@ -132,8 +132,7 @@ body {
 /* 카드 컨테이너 */
 .agent-card {
   width: 80px;
-  display: none;
-  /* has-multiple 시 flex로 */
+  display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: flex-end;
@@ -545,7 +544,7 @@ body {
 
 /* 에이전트 카드: 싱글 모드에서 숨김 */
 .agent-grid:not(.has-multiple) .agent-card {
-  display: none;
+  display: none !important;
 }
 
 /* ════════════════════════════════════════
