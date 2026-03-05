@@ -3,7 +3,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const AgentManager = require('./agentManager');
-const { adaptAgentToMissionControl } = require('./missionControlAdapter');
+const { adaptAgentToDashboard } = require('./dashboardAdapter');
 const errorHandler = require('./errorHandler');
 const Ajv = require('ajv');
 const { getWindowSizeForAgents, checkSessionActive } = require('./utils');
@@ -42,7 +42,7 @@ process.on('unhandledRejection', (reason, promise) => {
   } catch (e) {}
 });
 
-// Mission Control WebSocket broadcast (사용하지 않음 - 별도 서버 불필요)
+// Dashboard WebSocket broadcast (사용하지 않음 - 별도 서버 불필요)
 function broadcastUpdate(type, data) {
   // 현재는 사용하지 않음. 필요시 구현
 }
@@ -159,20 +159,20 @@ function stopKeepAlive() {
 }
 
 // =====================================================
-// Mission Control Dashboard Window Management
+// Dashboard Dashboard Window Management
 // =====================================================
-let missionControlWindow = null;
-let missionControlAuthToken = null;
+let dashboardWindow = null;
+let dashboardAuthToken = null;
 
 function generateAuthToken() {
   const crypto = require('crypto');
   return crypto.randomBytes(32).toString('hex');
 }
 
-function createMissionControlWindow() {
-  if (missionControlWindow && !missionControlWindow.isDestroyed()) {
+function createDashboardWindow() {
+  if (dashboardWindow && !dashboardWindow.isDestroyed()) {
     debugLog('[MissionControl] Window already open, focusing existing window');
-    missionControlWindow.focus();
+    dashboardWindow.focus();
     return { success: true, alreadyOpen: true };
   }
 
@@ -181,7 +181,7 @@ function createMissionControlWindow() {
     const { width, height } = screen.getPrimaryDisplay().workAreaSize;
 
     // Create window with secure settings
-    missionControlWindow = new BrowserWindow({
+    dashboardWindow = new BrowserWindow({
       width: Math.floor(width * 0.8),
       height: Math.floor(height * 0.8),
       x: Math.floor(width * 0.1),
@@ -197,10 +197,10 @@ function createMissionControlWindow() {
     });
 
     // Load the HTML file directly (no HTTP server needed)
-    missionControlWindow.loadFile('mission-control.html');
+    dashboardWindow.loadFile('dashboard.html');
 
     // Log when window is ready
-    missionControlWindow.webContents.on('did-finish-load', () => {
+    dashboardWindow.webContents.on('did-finish-load', () => {
       debugLog('[MissionControl] Window loaded successfully');
 
       // Send initial agent data
@@ -208,23 +208,23 @@ function createMissionControlWindow() {
         const agents = agentManager.getAllAgents();
         const adaptedAgents = agents.map(agent => adaptAgentToMissionControl(agent));
         debugLog(`[MissionControl] Sending ${adaptedAgents.length} agents to dashboard`);
-        missionControlWindow.webContents.send('mission-control-initial-data', adaptedAgents);
+        dashboardWindow.webContents.send('dashboard-initial-data', adaptedAgents);
       }
     });
 
     // Handle navigation errors
-    missionControlWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+    dashboardWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
       debugLog(`[MissionControl] Failed to load: ${errorCode} - ${errorDescription}`);
-      missionControlWindow.destroy();
-      missionControlWindow = null;
-      missionControlAuthToken = null;
+      dashboardWindow.destroy();
+      dashboardWindow = null;
+      dashboardAuthToken = null;
     });
 
     // Clean up when window is closed
-    missionControlWindow.on('closed', () => {
+    dashboardWindow.on('closed', () => {
       debugLog('[MissionControl] Window closed');
-      missionControlWindow = null;
-      missionControlAuthToken = null;
+      dashboardWindow = null;
+      dashboardAuthToken = null;
     });
 
     debugLog('[MissionControl] Window created');
@@ -233,19 +233,19 @@ function createMissionControlWindow() {
 
   } catch (error) {
     debugLog(`[MissionControl] Failed to create window: ${error.message}`);
-    missionControlWindow = null;
-    missionControlAuthToken = null;
+    dashboardWindow = null;
+    dashboardAuthToken = null;
     return { success: false, error: error.message };
   }
 }
 
 function closeMissionControlWindow() {
-  if (missionControlWindow && !missionControlWindow.isDestroyed()) {
-    missionControlWindow.close();
+  if (dashboardWindow && !dashboardWindow.isDestroyed()) {
+    dashboardWindow.close();
     debugLog('[MissionControl] Window closed by request');
   }
-  missionControlWindow = null;
-  missionControlAuthToken = null;
+  dashboardWindow = null;
+  dashboardAuthToken = null;
 }
 
 
@@ -956,10 +956,10 @@ app.whenReady().then(() => {
         mainWindow.webContents.send('agent-added', agent);
         resizeWindowForAgents(agentManager.getAllAgents());
       }
-      // Forward to Mission Control window
-      if (missionControlWindow && !missionControlWindow.isDestroyed()) {
+      // Forward to Dashboard window
+      if (dashboardWindow && !dashboardWindow.isDestroyed()) {
         const adaptedAgent = adaptAgentToMissionControl(agent);
-        missionControlWindow.webContents.send('mission-agent-added', adaptedAgent);
+        dashboardWindow.webContents.send('dashboard-agent-added', adaptedAgent);
       }
       savePersistedState();
     });
@@ -970,10 +970,10 @@ app.whenReady().then(() => {
         // 상태 변화로 Sub/Team이 생기면 창 크기가 달라질 수 있으므로 업데이트
         resizeWindowForAgents(agentManager.getAllAgents());
       }
-      // Forward to Mission Control window
-      if (missionControlWindow && !missionControlWindow.isDestroyed()) {
+      // Forward to Dashboard window
+      if (dashboardWindow && !dashboardWindow.isDestroyed()) {
         const adaptedAgent = adaptAgentForMissionControl(agent);
-        missionControlWindow.webContents.send('mission-agent-updated', adaptedAgent);
+        dashboardWindow.webContents.send('dashboard-agent-updated', adaptedAgent);
       }
       savePersistedState();
     });
@@ -983,9 +983,9 @@ app.whenReady().then(() => {
         mainWindow.webContents.send('agent-removed', data);
         resizeWindowForAgents(agentManager.getAllAgents());
       }
-      // Forward to Mission Control window
-      if (missionControlWindow && !missionControlWindow.isDestroyed()) {
-        missionControlWindow.webContents.send('mission-agent-removed', data);
+      // Forward to Dashboard window
+      if (dashboardWindow && !dashboardWindow.isDestroyed()) {
+        dashboardWindow.webContents.send('dashboard-agent-removed', data);
       }
       savePersistedState();
     });
@@ -995,9 +995,9 @@ app.whenReady().then(() => {
         mainWindow.webContents.send('agents-cleaned', data);
         resizeWindowForAgents(agentManager.getAllAgents());
       }
-      // Forward to Mission Control window
-      if (missionControlWindow && !missionControlWindow.isDestroyed()) {
-        missionControlWindow.webContents.send('mission-agent-removed', { type: 'batch', ...data });
+      // Forward to Dashboard window
+      if (dashboardWindow && !dashboardWindow.isDestroyed()) {
+        dashboardWindow.webContents.send('dashboard-agent-removed', { type: 'batch', ...data });
       }
       savePersistedState();
     });
@@ -1136,13 +1136,13 @@ ipcMain.on('focus-terminal', (event, agentId) => {
 });
 
 // =====================================================
-// Mission Control IPC Handlers
+// Dashboard IPC Handlers
 // =====================================================
 
-// Open Mission Control dashboard
+// Open Dashboard dashboard
 ipcMain.handle('open-web-dashboard', async (event) => {
   try {
-    const result = createMissionControlWindow();
+    const result = createDashboardWindow();
     return result;
   } catch (error) {
     debugLog(`[MissionControl] Error opening dashboard: ${error.message}`);
@@ -1150,7 +1150,7 @@ ipcMain.handle('open-web-dashboard', async (event) => {
   }
 });
 
-// Close Mission Control dashboard
+// Close Dashboard dashboard
 ipcMain.handle('close-web-dashboard', async (event) => {
   try {
     closeMissionControlWindow();
@@ -1161,10 +1161,10 @@ ipcMain.handle('close-web-dashboard', async (event) => {
   }
 });
 
-// Check if Mission Control dashboard is open
+// Check if Dashboard dashboard is open
 ipcMain.handle('is-web-dashboard-open', async (event) => {
   return {
-    isOpen: missionControlWindow !== null && !missionControlWindow.isDestroyed()
+    isOpen: dashboardWindow !== null && !dashboardWindow.isDestroyed()
   };
 });
 
@@ -1209,8 +1209,8 @@ ipcMain.handle('execute-recovery-action', async (event, errorId, action) => {
   }
 });
 
-// Handle focus-agent command from Mission Control
-ipcMain.on('mission-focus-agent', (event, agentId) => {
+// Handle focus-agent command from Dashboard
+ipcMain.on('dashboard-focus-agent', (event, agentId) => {
   debugLog(`[MissionControl] Focus requested for agent: ${agentId.slice(0, 8)}`);
   // Forward to the existing focus-terminal handler
   const pid = sessionPids.get(agentId);
@@ -1244,22 +1244,22 @@ ipcMain.on('mission-focus-agent', (event, agentId) => {
   });
 });
 
-// Handle dismiss-agent command from Mission Control
-ipcMain.on('mission-dismiss-agent', (event, agentId) => {
+// Handle dismiss-agent command from Dashboard
+ipcMain.on('dashboard-dismiss-agent', (event, agentId) => {
   debugLog(`[MissionControl] Dismiss requested for agent: ${agentId.slice(0, 8)}`);
   if (agentManager) {
     agentManager.dismissAgent(agentId);
   }
 });
 
-// Get current agents for Mission Control
-ipcMain.on('get-mission-control-agents', (event) => {
+// Get current agents for Dashboard
+ipcMain.on('get-dashboard-agents', (event) => {
   if (agentManager) {
     const agents = agentManager.getAllAgents();
     const adaptedAgents = agents.map(agent => adaptAgentToMissionControl(agent));
-    event.reply('mission-control-agents-response', adaptedAgents);
+    event.reply('dashboard-agents-response', adaptedAgents);
   } else {
-    event.reply('mission-control-agents-response', []);
+    event.reply('dashboard-agents-response', []);
   }
 });
 

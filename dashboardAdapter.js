@@ -1,12 +1,12 @@
 /**
- * Mission Control Data Adapter
- * Converts Pixel Agent Desk agent format to Mission Control format
+ * Dashboard Data Adapter
+ * Converts Pixel Agent Desk agent format to Dashboard format
  */
 
 const path = require('path');
 
 /**
- * State mapping from Pixel Agent Desk to Mission Control
+ * State mapping from Pixel Agent Desk to Dashboard
  */
 const STATE_MAP = {
   'Working': 'working',
@@ -23,11 +23,11 @@ const STATE_MAP = {
 const DEFAULT_STATE = 'idle';
 
 /**
- * Map Pixel Agent Desk state to Mission Control state
+ * Map Pixel Agent Desk state to Dashboard state
  * @param {string} pixelState - Pixel Agent Desk state
- * @returns {string} Mission Control state
+ * @returns {string} Dashboard state
  */
-function mapPixelStateToMissionState(pixelState) {
+function mapPixelStateToDashboardState(pixelState) {
   return STATE_MAP[pixelState] || DEFAULT_STATE;
 }
 
@@ -72,17 +72,17 @@ function isAgentActive(state) {
 }
 
 /**
- * Adapt a single Pixel Agent Desk agent to Mission Control format
+ * Adapt a single Pixel Agent Desk agent to Dashboard format
  * @param {Object} pixelAgent - Pixel Agent Desk agent object
- * @returns {Object} Mission Control formatted agent
+ * @returns {Object} Dashboard formatted agent
  */
-function adaptAgentToMissionControl(pixelAgent) {
+function adaptAgentToDashboard(pixelAgent) {
   return {
     id: pixelAgent.id || pixelAgent.sessionId,
     sessionId: pixelAgent.sessionId,
     name: pixelAgent.displayName || 'Agent',
     project: extractProjectName(pixelAgent.projectPath),
-    status: mapPixelStateToMissionState(pixelAgent.state),
+    status: mapPixelStateToDashboardState(pixelAgent.state),
     type: determineAgentType(pixelAgent),
     metadata: {
       isSubagent: pixelAgent.isSubagent || false,
@@ -99,17 +99,17 @@ function adaptAgentToMissionControl(pixelAgent) {
 }
 
 /**
- * Adapt multiple Pixel Agent Desk agents to Mission Control format
+ * Adapt multiple Pixel Agent Desk agents to Dashboard format
  * @param {Array<Object>} pixelAgents - Array of Pixel Agent Desk agent objects
- * @returns {Array<Object>} Array of Mission Control formatted agents
+ * @returns {Array<Object>} Array of Dashboard formatted agents
  */
-function adaptAgentsToMissionControl(pixelAgents) {
+function adaptAgentsToDashboard(pixelAgents) {
   if (!Array.isArray(pixelAgents)) return [];
-  return pixelAgents.map(adaptAgentToMissionControl);
+  return pixelAgents.map(adaptAgentToDashboard);
 }
 
 /**
- * Validate agent data before sending to Mission Control
+ * Validate agent data before sending to Dashboard
  * @param {Object} agent - Agent object to validate
  * @returns {boolean} True if agent data is valid
  */
@@ -140,9 +140,9 @@ function sanitizeAgentData(agent) {
 }
 
 module.exports = {
-  adaptAgentToMissionControl,
-  adaptAgentsToMissionControl,
-  mapPixelStateToMissionState,
+  adaptAgentToDashboard,
+  adaptAgentsToDashboard,
+  mapPixelStateToDashboardState,
   extractProjectName,
   determineAgentType,
   calculateElapsedTime,

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Mission Control Dashboard</title>
+  <title>Dashboard Dashboard</title>
   <style>
     * {
       margin: 0;
@@ -386,7 +386,7 @@
   </div>
 
   <script>
-    // Mission Control Dashboard Script
+    // Dashboard Dashboard Script
     let agents = [];
     let initialized = false;
 
@@ -394,36 +394,36 @@
      * Initialize dashboard
      */
     async function init() {
-      console.log('[MissionControl] Initializing dashboard...');
+      console.log('[Dashboard] Initializing dashboard...');
 
       // Show empty state immediately (will be replaced when data arrives)
       renderDashboard();
 
       // Listen for initial data from main process
-      if (window.missionControlAPI) {
+      if (window.dashboardAPI) {
         try {
           // Request initial agents
-          console.log('[MissionControl] Requesting initial agents...');
-          const initialAgents = await window.missionControlAPI.getInitialAgents();
-          console.log('[MissionControl] Received initial agents:', initialAgents.length);
+          console.log('[Dashboard] Requesting initial agents...');
+          const initialAgents = await window.dashboardAPI.getInitialAgents();
+          console.log('[Dashboard] Received initial agents:', initialAgents.length);
           agents = initialAgents || [];
           initialized = true;
           renderDashboard();
         } catch (error) {
-          console.error('[MissionControl] Failed to get initial agents:', error);
+          console.error('[Dashboard] Failed to get initial agents:', error);
           agents = [];
           renderDashboard();
         }
 
         // Listen for agent events from main process
-        window.missionControlAPI.onAgentAdded((agent) => {
-          console.log('[MissionControl] Agent added:', agent);
+        window.dashboardAPI.onAgentAdded((agent) => {
+          console.log('[Dashboard] Agent added:', agent);
           agents.push(agent);
           renderDashboard();
         });
 
-        window.missionControlAPI.onAgentUpdated((agent) => {
-          console.log('[MissionControl] Agent updated:', agent);
+        window.dashboardAPI.onAgentUpdated((agent) => {
+          console.log('[Dashboard] Agent updated:', agent);
           const index = agents.findIndex(a => a.id === agent.id);
           if (index !== -1) {
             agents[index] = agent;
@@ -433,8 +433,8 @@
           renderDashboard();
         });
 
-        window.missionControlAPI.onAgentRemoved((data) => {
-          console.log('[MissionControl] Agent removed:', data);
+        window.dashboardAPI.onAgentRemoved((data) => {
+          console.log('[Dashboard] Agent removed:', data);
           agents = agents.filter(a => a.id !== data.id);
           renderDashboard();
         });
@@ -442,7 +442,7 @@
         // Update connection status
         updateConnectionStatus(true);
       } else {
-        console.error('[MissionControl] missionControlAPI not available');
+        console.error('[Dashboard] dashboardAPI not available');
         updateConnectionStatus(false);
         agents = [];
         renderDashboard();

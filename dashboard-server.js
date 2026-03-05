@@ -1,5 +1,5 @@
 /**
- * Mission Control Web Server
+ * Dashboard Web Server
  * Enhanced with REST API and WebSocket for real-time updates
  */
 
@@ -35,9 +35,9 @@ function setAgentManager(manager) {
 }
 
 /**
- * Set the Mission Control window reference
+ * Set the Dashboard window reference
  */
-function setMissionControlWindow(window) {
+function setDashboardWindow(window) {
   missionControlWindow = window;
 }
 
@@ -131,7 +131,7 @@ function broadcastUpdate(type, data) {
       try {
         client.send(message);
       } catch (error) {
-        console.error('[MissionControl] Error sending to client:', error.message);
+        console.error('[Dashboard] Error sending to client:', error.message);
       }
     }
   });
@@ -144,7 +144,7 @@ function handleRequest(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = url.pathname;
 
-  console.log(`[MissionControl Server] ${req.method} ${pathname}`);
+  console.log(`[Dashboard Server] ${req.method} ${pathname}`);
 
   // API routes
   if (pathname.startsWith('/api/')) {
@@ -164,7 +164,7 @@ function handleRequest(req, res) {
   if (pathname === '/' || pathname === '/index.html') {
     fs.readFile(HTML_FILE, (err, data) => {
       if (err) {
-        console.error('[MissionControl Server] Error reading HTML:', err);
+        console.error('[Dashboard Server] Error reading HTML:', err);
         res.writeHead(500, { 'Content-Type': 'text/plain' });
         res.end('Internal Server Error');
         return;
@@ -326,15 +326,15 @@ server.on('upgrade', (req, socket, head) => {
 
     socket.on('close', () => {
       wsClients.delete(client);
-      console.log('[MissionControl] WebSocket client disconnected');
+      console.log('[Dashboard] WebSocket client disconnected');
     });
 
     socket.on('error', (err) => {
-      console.error('[MissionControl] WebSocket error:', err.message);
+      console.error('[Dashboard] WebSocket error:', err.message);
       wsClients.delete(client);
     });
 
-    console.log('[MissionControl] WebSocket client connected');
+    console.log('[Dashboard] WebSocket client connected');
   } else {
     socket.destroy();
   }
@@ -345,18 +345,18 @@ server.on('upgrade', (req, socket, head) => {
  */
 function startServer() {
   server.listen(PORT, () => {
-    console.log(`[MissionControl Server] 🚀 Server running at http://localhost:${PORT}`);
-    console.log(`[MissionControl Server] 📊 Serving mission-control.html`);
-    console.log(`[MissionControl Server] 🔌 WebSocket endpoint: ws://localhost:${PORT}/ws`);
+    console.log(`[Dashboard Server] 🚀 Server running at http://localhost:${PORT}`);
+    console.log(`[Dashboard Server] 📊 Serving mission-control.html`);
+    console.log(`[Dashboard Server] 🔌 WebSocket endpoint: ws://localhost:${PORT}/ws`);
   });
 
   // 에러 처리
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
-      console.error(`[MissionControl Server] ❌ Port ${PORT} already in use!`);
-      console.error('[MissionControl Server] 💡 Another server is already running on this port.');
+      console.error(`[Dashboard Server] ❌ Port ${PORT} already in use!`);
+      console.error('[Dashboard Server] 💡 Another server is already running on this port.');
     } else {
-      console.error('[MissionControl Server] ❌ Server error:', err);
+      console.error('[Dashboard Server] ❌ Server error:', err);
     }
   });
 
@@ -365,7 +365,7 @@ function startServer() {
 
 // Graceful shutdown
 process.on('SIGINT', () => {
-  console.log('\n[MissionControl Server] 🛑 Server shutting down...');
+  console.log('\n[Dashboard Server] 🛑 Server shutting down...');
 
   // Close all WebSocket connections
   wsClients.forEach(client => {
@@ -378,7 +378,7 @@ process.on('SIGINT', () => {
   wsClients.clear();
 
   server.close(() => {
-    console.log('[MissionControl Server] ✅ Server closed');
+    console.log('[Dashboard Server] ✅ Server closed');
     process.exit(0);
   });
 });
@@ -396,5 +396,5 @@ module.exports = {
 // If this file is run directly (not required), start the server
 if (require.main === module) {
   startServer();
-  console.log('[MissionControl Server] Press Ctrl+C to stop');
+  console.log('[Dashboard Server] Press Ctrl+C to stop');
 }
