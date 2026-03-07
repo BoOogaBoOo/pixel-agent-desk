@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Mission Control Desk</title>
+  <title>Pixel Agent Desk</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link
@@ -313,6 +313,7 @@
       grid-template-columns: 2fr 1fr;
       gap: 24px;
       margin-bottom: 24px;
+      height: calc(100vh - 220px);
       min-height: 500px;
     }
 
@@ -357,14 +358,12 @@
       align-items: center;
       justify-content: center;
       position: relative;
-      overflow: hidden;
+      overflow: auto;
     }
 
     #office-canvas {
       image-rendering: pixelated;
       image-rendering: crisp-edges;
-      max-width: 100%;
-      max-height: 100%;
     }
 
     /* Agent List Panel */
@@ -712,7 +711,7 @@
     <aside class="sidebar">
       <div class="sidebar-header">
         <div class="brand-icon"></div>
-        Mission Control
+        Pixel Agent Desk
       </div>
       <nav class="sidebar-nav">
         <div class="nav-label">Main</div>
