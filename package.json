@@ -27,7 +27,12 @@
     "multi-agent",
     "jsonl"
   ],
-  "author": "geunilbae",
+  "author": "Mgpixelart",
+  "homepage": "https://github.com/Mgpixelart/pixel-agent-desk",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Mgpixelart/pixel-agent-desk.git"
+  },
   "license": "MIT",
   "build": {
     "appId": "com.geunilbae.pixel-agent-desk",
