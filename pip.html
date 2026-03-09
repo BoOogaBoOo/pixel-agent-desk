@@ -79,41 +79,59 @@
     </button>
   </div>
 
-  <script src="/src/office/office-config.js?v=5"></script>
-  <script src="/src/office/office-layers.js?v=5"></script>
-  <script src="/src/office/office-coords.js?v=5"></script>
-  <script src="/src/office/office-pathfinder.js?v=5"></script>
-  <script src="/src/office/office-sprite.js?v=5"></script>
-  <script src="/src/office/office-character.js?v=5"></script>
-  <script src="/src/office/office-renderer.js?v=5"></script>
-  <script src="/src/office/office-ui.js?v=5"></script>
-  <script src="/src/office/office-init.js?v=5"></script>
+  <script src="/src/office/office-config.js?v=6"></script>
+  <script src="/src/office/office-layers.js?v=6"></script>
+  <script src="/src/office/office-coords.js?v=6"></script>
+  <script src="/src/office/office-pathfinder.js?v=6"></script>
+  <script src="/src/office/office-sprite.js?v=6"></script>
+  <script src="/src/office/office-character.js?v=6"></script>
+  <script src="/src/office/office-renderer.js?v=6"></script>
+  <script src="/src/office/office-ui.js?v=6"></script>
+  <script src="/src/office/office-init.js?v=6"></script>
   <script>
     // Minimal boot: init office + connect SSE for agent updates
     (function () {
+      var sseDelay = 1000;
+      var sseSource = null;
+
+      function connectSSE() {
+        if (sseSource) { sseSource.close(); sseSource = null; }
+        var es = new EventSource('/api/events');
+        sseSource = es;
+
+        es.onerror = function () {
+          es.close();
+          sseSource = null;
+          console.warn('[PiP] SSE disconnected, retrying in', sseDelay, 'ms');
+          setTimeout(connectSSE, sseDelay);
+          sseDelay = Math.min(sseDelay * 2, 30000);
+        };
+
+        es.addEventListener('connected', function () {
+          sseDelay = 1000;
+          fetch('/api/agents').then(function (r) { return r.json(); })
+            .then(function (agents) {
+              agents.forEach(function (a) { officeOnAgentCreated(a); });
+            });
+        });
+        es.addEventListener('agent.created', function (e) {
+          officeOnAgentCreated(JSON.parse(e.data).data);
+        });
+        es.addEventListener('agent.updated', function (e) {
+          officeOnAgentUpdated(JSON.parse(e.data).data);
+        });
+        es.addEventListener('agent.removed', function (e) {
+          officeOnAgentRemoved(JSON.parse(e.data).data);
+        });
+      }
+
       function boot() {
         console.log('[PiP] boot start');
         initOffice().then(function () {
           console.log('[PiP] office initialized, canvas:',
             document.getElementById('office-canvas').width, 'x',
             document.getElementById('office-canvas').height);
-          // Connect SSE for live agent updates
-          var es = new EventSource('/api/events');
-          es.addEventListener('connected', function () {
-            fetch('/api/agents').then(function (r) { return r.json(); })
-              .then(function (agents) {
-                agents.forEach(function (a) { officeOnAgentCreated(a); });
-              });
-          });
-          es.addEventListener('agent.created', function (e) {
-            officeOnAgentCreated(JSON.parse(e.data).data);
-          });
-          es.addEventListener('agent.updated', function (e) {
-            officeOnAgentUpdated(JSON.parse(e.data).data);
-          });
-          es.addEventListener('agent.removed', function (e) {
-            officeOnAgentRemoved(JSON.parse(e.data).data);
-          });
+          connectSSE();
         }).catch(function (e) {
           console.error('[PiP] init failed:', e);
         });
