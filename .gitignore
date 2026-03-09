@@ -46,8 +46,6 @@ nul
 # Test coverage
 coverage/
 
-# Docs (internal dev notes)
-docs/
 
 # Temp / backup files
 *.bak
@@ -56,6 +54,7 @@ docs/
 
 # Claude Code local settings
 .claude/
+CLAUDE.md
 
 # Electron build artifacts
 crash-reports/
