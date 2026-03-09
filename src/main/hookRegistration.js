@@ -42,6 +42,15 @@ function writeClaudeConfig(config, debugLog) {
   }
 }
 
+const HOOK_EVENTS = [
+  'SessionStart', 'SessionEnd', 'UserPromptSubmit',
+  'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
+  'Stop', 'TaskCompleted', 'PermissionRequest', 'Notification',
+  'SubagentStart', 'SubagentStop', 'TeammateIdle',
+  'ConfigChange', 'WorktreeCreate', 'WorktreeRemove',
+  'PreCompact'
+];
+
 function hasOurHookInEntry(entry, hookUrl) {
   return entry.hooks && entry.hooks.some(h => h.type === 'http' && h.url === hookUrl);
 }
@@ -54,16 +63,13 @@ function isHookRegistered(debugLog) {
     return false;
   }
 
-  const hookEvents = ['SessionStart', 'PreToolUse', 'PostToolUse'];
-  for (const event of hookEvents) {
-    if (config.hooks[event] && Array.isArray(config.hooks[event])) {
-      if (config.hooks[event].some(entry => hasOurHookInEntry(entry, HTTP_HOOK_URL))) {
-        return true;
-      }
-    }
-  }
-
-  return false;
+  // All events must be registered — a partial registration (e.g. from an older
+  // version that only had 3 events) must trigger a full re-registration so that
+  // new events like SubagentStart/SubagentStop/TeammateIdle/PreCompact get added.
+  return HOOK_EVENTS.every(event =>
+    Array.isArray(config.hooks[event]) &&
+    config.hooks[event].some(entry => hasOurHookInEntry(entry, HTTP_HOOK_URL))
+  );
 }
 
 function registerClaudeHooks(debugLog) {
@@ -81,14 +87,7 @@ function registerClaudeHooks(debugLog) {
   config.hooks = config.hooks || {};
 
   const HTTP_HOOK_URL = `http://localhost:${HOOK_SERVER_PORT}/hook`;
-  const hookEvents = [
-    'SessionStart', 'SessionEnd', 'UserPromptSubmit',
-    'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
-    'Stop', 'TaskCompleted', 'PermissionRequest', 'Notification',
-    'SubagentStart', 'SubagentStop', 'TeammateIdle',
-    'ConfigChange', 'WorktreeCreate', 'WorktreeRemove',
-    'PreCompact'
-  ];
+  const hookEvents = HOOK_EVENTS;
 
   const ourEntry = {
     matcher: "*",
