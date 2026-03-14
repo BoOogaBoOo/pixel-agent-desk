@@ -34,7 +34,10 @@ class AgentManager extends EventEmitter {
       stateDebounceMs: 500,  // Working→Thinking transition debounce (ms)
     };
     this._customNamesPath = path.join(os.homedir(), '.claude', 'agent-names.json');
+    this._profilesPath = path.join(os.homedir(), '.claude', 'agent-profiles.json');
+    this.profiles = new Map(); // agentId → { totalWorkMs, tasksCompleted, errorsHit, level, xp }
     this._loadCustomNames();
+    this._loadProfiles();
   }
 
   start() {
@@ -80,9 +83,14 @@ class AgentManager extends EventEmitter {
       activeStartTime = now;
     }
 
-    // When returning to Done, save the last elapsed duration
-    if (newState === 'Done' && existingAgent && isActive(prevState)) {
+    // When returning to Done/Waiting, save the last elapsed duration + track profile
+    if ((newState === 'Done' || newState === 'Waiting') && existingAgent && isActive(prevState)) {
       lastDuration = now - activeStartTime;
+      if (lastDuration > 1000) this.trackWorkTime(agentId, lastDuration);
+      if (newState === 'Done') this.trackTaskCompleted(agentId);
+    }
+    if (newState === 'Error' && existingAgent) {
+      this.trackError(agentId);
     }
 
     const m = (key, defaultVal = null) => mergeField(entry, existingAgent, key, defaultVal);
@@ -286,6 +294,82 @@ class AgentManager extends EventEmitter {
       fs.renameSync(tmp, this._customNamesPath);
     } catch (e) {
       console.warn(`[AgentManager] Failed to save custom names: ${e.message}`);
+    }
+  }
+
+  // ─── Agent Profiles ───
+
+  getProfile(agentId) {
+    if (!this.profiles.has(agentId)) {
+      this.profiles.set(agentId, { totalWorkMs: 0, tasksCompleted: 0, errorsHit: 0, level: 1, xp: 0 });
+    }
+    return this.profiles.get(agentId);
+  }
+
+  /** Track work time when agent transitions from working→non-working */
+  trackWorkTime(agentId, durationMs) {
+    const p = this.getProfile(agentId);
+    p.totalWorkMs += durationMs;
+    p.xp += Math.floor(durationMs / 60000); // 1 XP per minute worked
+    this._checkLevelUp(p);
+    this._saveProfilesDebounced();
+  }
+
+  trackTaskCompleted(agentId) {
+    const p = this.getProfile(agentId);
+    p.tasksCompleted++;
+    p.xp += 10; // 10 XP per task
+    this._checkLevelUp(p);
+    this._saveProfilesDebounced();
+  }
+
+  trackError(agentId) {
+    const p = this.getProfile(agentId);
+    p.errorsHit++;
+    this._saveProfilesDebounced();
+  }
+
+  _checkLevelUp(profile) {
+    // XP thresholds: level 1=0, 2=50, 3=150, 4=300, 5=500, ...
+    const thresholds = [0, 50, 150, 300, 500, 800, 1200, 1800, 2500, 3500, 5000];
+    for (let i = thresholds.length - 1; i >= 0; i--) {
+      if (profile.xp >= thresholds[i]) {
+        profile.level = i + 1;
+        break;
+      }
+    }
+  }
+
+  _loadProfiles() {
+    try {
+      if (fs.existsSync(this._profilesPath)) {
+        const data = JSON.parse(fs.readFileSync(this._profilesPath, 'utf8'));
+        for (const [id, p] of Object.entries(data)) {
+          this.profiles.set(id, p);
+        }
+        console.log(`[AgentManager] Loaded ${this.profiles.size} agent profiles`);
+      }
+    } catch (e) {
+      console.warn(`[AgentManager] Failed to load profiles: ${e.message}`);
+    }
+  }
+
+  _saveProfilesDebounced() {
+    if (this._profileSaveTimer) return;
+    this._profileSaveTimer = setTimeout(() => {
+      this._profileSaveTimer = null;
+      this._saveProfiles();
+    }, 5000); // batch saves every 5s
+  }
+
+  _saveProfiles() {
+    try {
+      fs.mkdirSync(path.dirname(this._profilesPath), { recursive: true });
+      const tmp = this._profilesPath + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(Object.fromEntries(this.profiles), null, 2), 'utf8');
+      fs.renameSync(tmp, this._profilesPath);
+    } catch (e) {
+      console.warn(`[AgentManager] Failed to save profiles: ${e.message}`);
     }
   }
 

@@ -42,6 +42,10 @@ var officeCharacters = {
       bubble: null,
       pipelineRoom: null,
       pipelineStage: -1,
+      mood: 'neutral',     // neutral, happy, focused, tired, frustrated
+      moodTimer: 0,
+      errorCount: 0,
+      workStartTime: null,
       role: agentData.name || 'Agent',
       metadata: {
         name: agentData.name || 'Agent',
@@ -118,6 +122,7 @@ var officeCharacters = {
           }
         } else if (newState === 'error') {
           officeRenderer.spawnEffect('warning', char.x, char.y - 65);
+          char.errorCount = (char.errorCount || 0) + 1;
         }
       }
     }
@@ -200,6 +205,7 @@ var officeCharacters = {
     this.characters.forEach(function (char) {
       self._updateTarget(char);
       self._updateMovement(char, deltaSec);
+      self._updateMood(char, deltaMs);
       tickOfficeAnimation(char, deltaMs);
 
       // Working sparkles
@@ -209,6 +215,33 @@ var officeCharacters = {
         }
       }
     });
+  },
+
+  _updateMood: function (char, deltaMs) {
+    // Track work session start
+    if ((char.agentState === 'working' || char.agentState === 'thinking') && !char.workStartTime) {
+      char.workStartTime = Date.now();
+    } else if (char.agentState !== 'working' && char.agentState !== 'thinking') {
+      char.workStartTime = null;
+    }
+
+    // Calculate mood based on state + duration + errors
+    var sessionMinutes = char.workStartTime ? (Date.now() - char.workStartTime) / 60000 : 0;
+    var prevMood = char.mood;
+
+    if (char.agentState === 'error' || char.agentState === 'help') {
+      char.mood = 'frustrated';
+    } else if (char.errorCount >= 3) {
+      char.mood = 'frustrated';
+    } else if (sessionMinutes > 30) {
+      char.mood = 'tired';
+    } else if (char.agentState === 'working' || char.agentState === 'thinking') {
+      char.mood = sessionMinutes > 15 ? 'focused' : 'happy';
+    } else if (char.agentState === 'done') {
+      char.mood = 'happy';
+    } else {
+      char.mood = 'neutral';
+    }
   },
 
   _updateTarget: function (char) {

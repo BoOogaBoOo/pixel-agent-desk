@@ -34,6 +34,9 @@ var officeRenderer = {
       partitionDesksByRoom(officeCoords.desk);
     }
 
+    // 3c. Init office cat
+    if (typeof officeCat !== 'undefined') officeCat.init();
+
     // 4. Load all skins + laptop images in parallel
     const resMap = { down: 'front', up: 'back', left: 'left', right: 'right' };
     const directions = ['down', 'up', 'left', 'right'];
@@ -89,6 +92,7 @@ var officeRenderer = {
   update: function (deltaMs) {
     const deltaSec = deltaMs / 1000;
     officeCharacters.updateAll(deltaSec, deltaMs);
+    if (typeof officeCat !== 'undefined') officeCat.update(deltaMs);
     this.updateEffects(deltaMs);
   },
 
@@ -146,6 +150,9 @@ var officeRenderer = {
       drawOfficeNameTag(ctx, agent);
       drawOfficeBubble(ctx, agent);
     }
+
+    // 3c. Office cat
+    if (typeof officeCat !== 'undefined') officeCat.draw(ctx);
 
     // 4. Foreground
     if (officeLayers.fgImage && officeLayers.fgImage.complete && officeLayers.fgImage.naturalWidth > 0) {

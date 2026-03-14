@@ -391,6 +391,40 @@ function handleSetAgentName(req, res) {
   });
 }
 
+// ─── Pipeline Status Store ───
+const pipelineStatuses = new Map(); // agentId → { status, detail, timestamp }
+
+function handleSetPipelineStatus(req, res) {
+  let body = '';
+  req.on('data', chunk => { body += chunk; if (body.length > 4096) req.destroy(); });
+  req.on('end', () => {
+    try {
+      const { agentId, status, detail } = JSON.parse(body);
+      if (!status) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'status required' }));
+        return;
+      }
+      const entry = { status: status.slice(0, 60), detail: (detail || '').slice(0, 120), timestamp: Date.now() };
+      // If agentId provided, store per-agent. Otherwise broadcast as global.
+      const key = agentId || '_global';
+      pipelineStatuses.set(key, entry);
+      broadcastSSE('pipeline.status', { key, ...entry });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true }));
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Invalid JSON' }));
+    }
+  });
+}
+
+function handleGetPipelineStatus(req, res) {
+  const obj = Object.fromEntries(pipelineStatuses);
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(obj));
+}
+
 /** Route table: "METHOD /path" → handler */
 const apiRoutes = {
   'GET /api/events': handleSSE,
@@ -399,7 +433,9 @@ const apiRoutes = {
   'GET /api/sessions': handleGetSessions,
   'GET /api/heatmap': handleGetHeatmap,
   'GET /api/health': handleGetHealth,
+  'GET /api/pipeline-status': handleGetPipelineStatus,
   'POST /api/agent-name': handleSetAgentName,
+  'POST /api/pipeline-status': handleSetPipelineStatus,
 };
 
 /**

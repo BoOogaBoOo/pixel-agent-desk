@@ -43,8 +43,27 @@ function trackCompletion(agentName, taskDescription) {
   }
 }
 
+// ─── Pipeline status cache (populated via SSE from /api/pipeline-status) ───
+var pipelineStatusCache = {};
+
+/** Fetch pipeline statuses and listen for SSE updates */
+function initPipelineStatusListener() {
+  // Initial fetch
+  fetch('/api/pipeline-status').then(function (r) { return r.json(); }).then(function (data) {
+    pipelineStatusCache = data || {};
+  }).catch(function () {});
+}
+
+/** Called from dashboard SSE handler for pipeline.status events */
+function onPipelineStatusUpdate(data) {
+  if (data && data.key) {
+    pipelineStatusCache[data.key] = { status: data.status, detail: data.detail, timestamp: data.timestamp };
+  }
+}
+
 /**
  * Get active tasks from characters currently working.
+ * Enriched with pipeline status if available.
  */
 function getActiveTasks() {
   if (typeof officeCharacters === 'undefined') return [];
@@ -53,19 +72,25 @@ function getActiveTasks() {
   for (var i = 0; i < chars.length; i++) {
     var c = chars[i];
     if (c.agentState === 'working' || c.agentState === 'thinking') {
-      var tool = (c.metadata && c.metadata.tool) || '';
-      var roomName = (typeof getRoomDisplayName === 'function' && c.pipelineRoom)
-        ? getRoomDisplayName(c.pipelineRoom) : '';
-      // Shorten tool name for board display
-      var shortTool = tool;
-      if (shortTool.length > 15) {
-        shortTool = shortTool.replace(/^mcp__plugin_playwright_playwright__/, 'pw:');
-        shortTool = shortTool.replace(/^mcp__plugin_supabase_supabase__/, 'sb:');
+      // Check for rich pipeline status first
+      var pipeStatus = pipelineStatusCache[c.id];
+      var now = Date.now();
+      var statusText = '';
+      if (pipeStatus && (now - pipeStatus.timestamp) < 300000) {
+        statusText = pipeStatus.status;
+      } else {
+        // Fallback: shorten tool name
+        var tool = (c.metadata && c.metadata.tool) || '';
+        statusText = tool;
+        if (statusText.length > 15) {
+          statusText = statusText.replace(/^mcp__plugin_playwright_playwright__/, 'pw:');
+          statusText = statusText.replace(/^mcp__plugin_supabase_supabase__/, 'sb:');
+        }
+        if (statusText.length > 15) statusText = statusText.slice(0, 14) + '…';
       }
-      if (shortTool.length > 15) shortTool = shortTool.slice(0, 14) + '…';
       tasks.push({
         name: (c.role || 'Agent').slice(0, 12),
-        tool: shortTool || c.agentState,
+        tool: statusText || c.agentState,
         state: c.agentState,
       });
     }

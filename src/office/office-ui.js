@@ -17,10 +17,14 @@ function drawOfficeNameTag(ctx, agent) {
 
   const statusColor = STATE_COLORS[agent.agentState] || STATE_COLORS[agent.metadata.status] || '#94a3b8';
 
+  // Mood emoji
+  const MOOD_EMOJI = { happy: '😊', focused: '🔥', tired: '😴', frustrated: '😤', neutral: '' };
+  const moodEmoji = (agent.mood && MOOD_EMOJI[agent.mood]) || '';
+
   // Role label
   ctx.font = 'bold 10px -apple-system, BlinkMacSystemFont, "Malgun Gothic", sans-serif';
-  let roleStr = agent.role || agent.metadata.name || 'Agent';
-  if (roleStr.length > 20) roleStr = roleStr.slice(0, 19) + '...';
+  let roleStr = (moodEmoji ? moodEmoji + ' ' : '') + (agent.role || agent.metadata.name || 'Agent');
+  if (roleStr.length > 22) roleStr = roleStr.slice(0, 21) + '...';
 
   const tw = ctx.measureText(roleStr).width;
   const roleBoxW = tw + 16;

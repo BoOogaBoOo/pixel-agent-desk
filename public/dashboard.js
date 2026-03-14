@@ -46,6 +46,7 @@ function connectSSE() {
   es.addEventListener('agent.created', e => { const d = JSON.parse(e.data).data; updateAgent(d); if (typeof officeOnAgentCreated === 'function') officeOnAgentCreated(d); });
   es.addEventListener('agent.updated', e => { const d = JSON.parse(e.data).data; updateAgent(d); if (typeof officeOnAgentUpdated === 'function') officeOnAgentUpdated(d); });
   es.addEventListener('agent.removed', e => { const d = JSON.parse(e.data).data; removeAgent(d.id); if (typeof officeOnAgentRemoved === 'function') officeOnAgentRemoved(d); });
+  es.addEventListener('pipeline.status', e => { const d = JSON.parse(e.data).data; if (typeof onPipelineStatusUpdate === 'function') onPipelineStatusUpdate(d); });
 }
 
 async function fetchInitialData() {
@@ -728,6 +729,7 @@ function initApp() {
   if (tgtEl) tgtEl.classList.add('active');
 
   connectSSE();
+  if (typeof initPipelineStatusListener === 'function') initPipelineStatusListener();
   if (target === 'heatmap') renderHeatmapView();
   else if (target === 'usage') renderUsageView();
 

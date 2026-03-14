@@ -44,51 +44,82 @@ var STAGE_PATTERNS = [
   [/promote/, /publish/, /insert/, /carousel/, /mcq-card/],
 ];
 
-// ─── Room spatial bounds (calibrated from actual office_xy.webp coordinates) ───
-// Map: 864x800. Desks 0-7 bottom-left (blue), Meeting 8-15 bottom-right (yellow).
-// War Room (mid-right) has boards → pipeline agents sit near them (Conference front row).
-// Dev Lab (bottom-left) = general coding agents (default).
-var ROOM_BOUNDS = {
-  command: { minX: 0, maxX: 450, minY: 480, maxY: 999 },     // Dev Lab (bottom-left) → general dev agents
-  content: { minX: 450, maxX: 999, minY: 440, maxY: 520 },    // Conference front row (near boards) → content/CA pipelines
-  qa:      { minX: 450, maxX: 999, minY: 520, maxY: 999 },    // Conference back row → QA Gate
+// ─── Trait-based desk system ───
+// Each desk gets traits based on spatial position. Agents request desks by trait.
+// Traits: 'dev' (general work), 'pipeline' (content/CA), 'qa' (audit/verify)
+var DESK_TRAITS = {
+  // Spatial bounds → trait assignment (calibrated from office_xy.webp coordinates)
+  regions: [
+    { trait: 'dev',      minX: 0,   maxX: 450, minY: 480, maxY: 999 },  // Dev Lab (bottom-left, blue desks)
+    { trait: 'pipeline', minX: 450, maxX: 999, minY: 440, maxY: 520 },  // Conference front (near boards)
+    { trait: 'qa',       minX: 450, maxX: 999, minY: 520, maxY: 999 },  // Conference back row
+  ],
 };
 
-// ─── Room desk partitions (populated by partitionDesksByRoom) ───
+// Desk index → traits array (populated by partitionDesksByRoom)
+var deskTraits = {};  // e.g. { 0: ['dev'], 8: ['pipeline'], 12: ['qa'] }
+
+// Room→trait mapping for detectPipelineRoom results
+var ROOM_TO_TRAIT = {
+  content: 'pipeline',
+  qa: 'qa',
+  command: 'dev',
+};
+
+// ─── Room desk partitions (populated by partitionDesksByRoom, backwards-compat) ───
 var roomDesks = {
-  content: [],  // desk indices for Content Factory
-  qa: [],       // desk indices for QA Gate
-  command: [],  // desk indices for Command Center
+  content: [],
+  qa: [],
+  command: [],
 };
 
 /**
- * Partition the flat desk array into room groups based on spatial bounds.
+ * Partition desks by spatial regions → assign traits. Also populate roomDesks for backwards compat.
  * Call after parseMapCoordinates().
  */
 function partitionDesksByRoom(deskCoords) {
   roomDesks.content = [];
   roomDesks.qa = [];
   roomDesks.command = [];
+  deskTraits = {};
 
   for (var i = 0; i < deskCoords.length; i++) {
     var d = deskCoords[i];
-    var assigned = false;
-    for (var room in ROOM_BOUNDS) {
-      var b = ROOM_BOUNDS[room];
-      if (d.x >= b.minX && d.x <= b.maxX && d.y >= b.minY && d.y <= b.maxY) {
-        roomDesks[room].push(i);
-        assigned = true;
-        break;
+    var traits = [];
+    for (var r = 0; r < DESK_TRAITS.regions.length; r++) {
+      var region = DESK_TRAITS.regions[r];
+      if (d.x >= region.minX && d.x <= region.maxX && d.y >= region.minY && d.y <= region.maxY) {
+        traits.push(region.trait);
       }
     }
-    if (!assigned) {
-      // Desks outside all bounds go to command (catch-all)
-      roomDesks.command.push(i);
-    }
+    if (traits.length === 0) traits.push('dev'); // default trait
+    deskTraits[i] = traits;
+
+    // Backwards compat: populate roomDesks
+    if (traits.indexOf('pipeline') !== -1) roomDesks.content.push(i);
+    else if (traits.indexOf('qa') !== -1) roomDesks.qa.push(i);
+    else roomDesks.command.push(i);
   }
 
-  console.log('[Pipeline] Room partitions — content:', roomDesks.content.length,
-    'qa:', roomDesks.qa.length, 'command:', roomDesks.command.length);
+  console.log('[Pipeline] Desk traits assigned — dev:', roomDesks.command.length,
+    'pipeline:', roomDesks.content.length, 'qa:', roomDesks.qa.length);
+}
+
+/**
+ * Find available desks matching a trait.
+ * @param {string} trait - 'dev', 'pipeline', or 'qa'
+ * @param {Set} usedDesks - set of occupied desk indices
+ * @returns {number[]} available desk indices with matching trait
+ */
+function findDesksByTrait(trait, usedDesks) {
+  var results = [];
+  for (var idx in deskTraits) {
+    var i = parseInt(idx);
+    if (deskTraits[i].indexOf(trait) !== -1 && !usedDesks.has(i)) {
+      results.push(i);
+    }
+  }
+  return results;
 }
 
 /**
@@ -129,15 +160,24 @@ function detectStage(agent) {
 
 /**
  * Get desks for a specific room, optionally filtered by stage.
- * For content room with a known stage, returns only desks in that stage's column.
+ * Uses trait-based lookup with fallback chain: requested trait → 'dev' → all desks.
  * @returns {number[]} array of desk indices
  */
 function getDesksForRoom(room, stage) {
-  var desks = roomDesks[room] || roomDesks.command;
-  if (desks.length === 0) desks = roomDesks.command;
+  var trait = ROOM_TO_TRAIT[room] || 'dev';
+  var desks = [];
+  for (var idx in deskTraits) {
+    if (deskTraits[idx].indexOf(trait) !== -1) desks.push(parseInt(idx));
+  }
+  if (desks.length === 0) {
+    // Fallback to 'dev' trait
+    for (var idx2 in deskTraits) {
+      if (deskTraits[idx2].indexOf('dev') !== -1) desks.push(parseInt(idx2));
+    }
+  }
 
-  // Stage-based sub-selection within content room
-  if (room === 'content' && stage >= 0 && stage < 4) {
+  // Stage-based sub-selection within pipeline desks
+  if (trait === 'pipeline' && stage >= 0 && stage < 4 && desks.length >= 4) {
     var perStage = Math.max(1, Math.floor(desks.length / 4));
     var start = stage * perStage;
     var end = (stage === 3) ? desks.length : start + perStage;
