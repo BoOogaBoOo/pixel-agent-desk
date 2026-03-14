@@ -9,7 +9,7 @@ const path = require('path');
 const { URL } = require('url');
 const { adaptAgentToDashboard } = require('./dashboardAdapter');
 
-const PORT = 3000;
+const PORT = 3737;
 const HTML_FILE = path.join(__dirname, '..', 'dashboard.html');
 
 // MIME type mapping
@@ -368,6 +368,29 @@ function handleGetHealth(req, res) {
   }));
 }
 
+function handleSetAgentName(req, res) {
+  let body = '';
+  req.on('data', chunk => body += chunk);
+  req.on('end', () => {
+    try {
+      const { agentId, name } = JSON.parse(body);
+      if (!agentId || !name) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'agentId and name required' }));
+        return;
+      }
+      if (agentManager) {
+        agentManager.applyCustomName(agentId, name.trim());
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true }));
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Invalid JSON' }));
+    }
+  });
+}
+
 /** Route table: "METHOD /path" → handler */
 const apiRoutes = {
   'GET /api/events': handleSSE,
@@ -376,6 +399,7 @@ const apiRoutes = {
   'GET /api/sessions': handleGetSessions,
   'GET /api/heatmap': handleGetHeatmap,
   'GET /api/health': handleGetHealth,
+  'POST /api/agent-name': handleSetAgentName,
 };
 
 /**

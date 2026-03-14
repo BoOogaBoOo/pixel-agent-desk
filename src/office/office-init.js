@@ -39,7 +39,7 @@ async function initOffice() {
     return;
   }
 
-  // Load existing agents
+  // Load existing agents (partition happens inside officeRenderer.init after parseMapCoordinates)
   try {
     const res = await fetch('/api/agents');
     const agents = await res.json();

@@ -145,7 +145,7 @@ function createWindowManager({ agentManager, sessionScanner, heatmapScanner, deb
       });
 
       // Load via HTTP server (instead of file://) — needed for serving office module static files
-      dashboardWindow.loadURL('http://localhost:3000/');
+      dashboardWindow.loadURL('http://localhost:3737/');
 
       dashboardWindow.webContents.setWindowOpenHandler(({ url }) => {
         shell.openExternal(url);
@@ -233,7 +233,7 @@ function createWindowManager({ agentManager, sessionScanner, heatmapScanner, deb
       debugLog('[PiP] Window shown');
     });
 
-    pipWindow.loadURL('http://localhost:3000/pip');
+    pipWindow.loadURL('http://localhost:3737/pip');
 
     pipWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
       debugLog(`[PiP] Failed to load: ${errorCode} - ${errorDescription}`);
@@ -296,7 +296,7 @@ function createWindowManager({ agentManager, sessionScanner, heatmapScanner, deb
 
       dashboardServer = serverModule.startServer();
 
-      debugLog('[Dashboard] Server started (port 3000)');
+      debugLog('[Dashboard] Server started (port 3737)');
     } catch (error) {
       debugLog(`[Dashboard] Failed to start: ${error.message}`);
     }

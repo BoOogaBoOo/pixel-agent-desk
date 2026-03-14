@@ -29,6 +29,11 @@ var officeRenderer = {
     // 3. Parse coordinates
     await parseMapCoordinates(officeLayers.width, officeLayers.height);
 
+    // 3b. Partition desks into pipeline rooms
+    if (typeof partitionDesksByRoom === 'function' && officeCoords.desk && officeCoords.desk.length > 0) {
+      partitionDesksByRoom(officeCoords.desk);
+    }
+
     // 4. Load all skins + laptop images in parallel
     const resMap = { down: 'front', up: 'back', left: 'left', right: 'right' };
     const directions = ['down', 'up', 'left', 'right'];
@@ -95,6 +100,11 @@ var officeRenderer = {
 
     // 1. Background
     ctx.drawImage(officeLayers.bgImage, 0, 0);
+
+    // 1b. Board overlays (whiteboard + TV in War Room)
+    if (typeof drawBoards === 'function') {
+      drawBoards(ctx);
+    }
 
     // 2. Laptops
     const laptopSpots = officeCoords.laptopSpots || [];

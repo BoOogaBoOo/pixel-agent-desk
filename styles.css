@@ -534,8 +534,8 @@ html {
   white-space: nowrap;
   text-align: center;
   z-index: 10;
-  pointer-events: none;
-  /* Exclude from click target so parent (character) receives clicks */
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
 }
 
 /* ════════════════════════════════════════

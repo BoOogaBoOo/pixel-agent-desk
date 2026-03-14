@@ -3,7 +3,7 @@
  * Register all ipcMain.on/handle handlers + focusTerminalByPid
  */
 
-const { ipcMain, screen } = require('electron');
+const { ipcMain, screen, BrowserWindow } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -130,6 +130,69 @@ function registerIpcHandlers({ agentManager, sessionPids, windowManager, debugLo
   });
 
   ipcMain.handle('execute-recovery-action', async () => ({ success: true }));
+
+  ipcMain.handle('set-agent-name', async (event, agentId, name) => {
+    if (!agentManager) return { success: false };
+    agentManager.applyCustomName(agentId, name);
+    return { success: true };
+  });
+
+  // Rename via main-process input window (floating window is non-focusable)
+  ipcMain.handle('rename-agent', async (event, agentId, currentName) => {
+    return new Promise((resolve) => {
+      const mw = windowManager.mainWindow;
+      const parentBounds = mw && !mw.isDestroyed() ? mw.getBounds() : { x: 400, y: 300 };
+
+      const inputWin = new BrowserWindow({
+        width: 320, height: 130,
+        x: parentBounds.x, y: parentBounds.y - 140,
+        frame: false, resizable: false, alwaysOnTop: true,
+        skipTaskbar: true, focusable: true,
+        backgroundColor: '#1a1a2e',
+        webPreferences: { nodeIntegration: false, contextIsolation: true }
+      });
+
+      const escaped = currentName.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+      const html = `<!DOCTYPE html><html><head><style>
+        *{margin:0;padding:0;box-sizing:border-box}
+        body{font-family:system-ui;background:#1a1a2e;color:#fff;padding:16px;display:flex;flex-direction:column;gap:10px}
+        label{font-size:13px;color:#8b949e}
+        input{width:100%;padding:8px 10px;background:#0d1117;border:1px solid #2f81f7;color:#fff;border-radius:6px;font-size:14px;outline:none}
+        input:focus{border-color:#58a6ff}
+        .btns{display:flex;gap:8px;justify-content:flex-end}
+        button{padding:5px 14px;border:none;border-radius:5px;font-size:12px;cursor:pointer}
+        .ok{background:#2f81f7;color:#fff} .ok:hover{background:#58a6ff}
+        .cancel{background:#30363d;color:#8b949e} .cancel:hover{background:#484f58}
+      </style></head><body>
+        <label>Rename agent</label>
+        <input id="n" value="${escaped}" autofocus />
+        <div class="btns"><button class="cancel" onclick="done(null)">Cancel</button><button class="ok" onclick="done(document.getElementById('n').value)">Rename</button></div>
+        <script>
+          document.getElementById('n').select();
+          document.getElementById('n').onkeydown=e=>{if(e.key==='Enter')done(document.getElementById('n').value);if(e.key==='Escape')done(null)};
+          function done(v){document.title=v===null?'__CANCEL__':v}
+        </script>
+      </body></html>`;
+
+      inputWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+
+      inputWin.webContents.on('page-title-updated', (evt, title) => {
+        evt.preventDefault();
+        inputWin.close();
+        if (title === '__CANCEL__' || !title.trim()) {
+          resolve(null);
+        } else {
+          const newName = title.trim();
+          if (agentManager) {
+            agentManager.applyCustomName(agentId, newName);
+          }
+          resolve(newName);
+        }
+      });
+
+      inputWin.on('closed', () => resolve(null));
+    });
+  });
 
   ipcMain.on('dashboard-focus-agent', (event, agentId) => {
     const pid = sessionPids.get(agentId);

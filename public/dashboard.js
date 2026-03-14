@@ -125,6 +125,50 @@ function updateConnectionStatus(up) {
   }
 }
 
+// ─── INLINE RENAME HELPER ───
+function attachInlineRename(el, agentId, currentName, onRenamed) {
+  el.style.cursor = 'pointer';
+  el.title = 'Double-click to rename';
+  const handler = (e) => {
+    e.stopPropagation();
+    const badge = el.querySelector('.mc-type-badge');
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = currentName;
+    input.style.cssText = 'background:rgba(0,0,0,0.5);border:1px solid var(--color-primary);color:#fff;font-size:0.85rem;padding:2px 6px;border-radius:4px;width:120px;outline:none;font-family:var(--font-ui);';
+    el.textContent = '';
+    el.appendChild(input);
+    if (badge) el.appendChild(badge);
+    input.focus();
+    input.select();
+
+    const commit = async () => {
+      const val = input.value.trim();
+      if (val && val !== currentName) {
+        try {
+          await fetch('/api/agent-name', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agentId, name: val })
+          });
+        } catch (err) { console.error('Rename failed:', err); }
+        if (onRenamed) onRenamed(val);
+      } else {
+        el.textContent = currentName;
+        if (badge) el.appendChild(badge);
+      }
+    };
+    input.onblur = commit;
+    input.onkeydown = (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
+      if (ev.key === 'Escape') { input.value = currentName; input.blur(); }
+    };
+  };
+  el.ondblclick = handler;
+  el.onclick = null;
+  return handler;
+}
+
 // ─── RENDER AGENTS ───
 function renderAgentList() {
   if (state.agents.size === 0) {
@@ -189,13 +233,22 @@ function updateAgentUI(ag) {
   `;
 
   if (existing) {
-    existing.innerHTML = html;
+    existing.innerHTML = html; // eslint-disable-line -- html is constructed from sanitized agent data, not user input
   } else {
     const div = document.createElement('div');
     div.className = 'mc-agent-card';
     div.dataset.id = ag.id;
-    div.innerHTML = html;
+    div.innerHTML = html; // eslint-disable-line -- html is constructed from sanitized agent data, not user input
     DOM.agentPanel.appendChild(div);
+  }
+
+  // After innerHTML is set — make agent name double-click-to-rename
+  const nameEl = (existing || DOM.agentPanel.querySelector(`[data-id="${ag.id}"]`)).querySelector('.mc-agent-name');
+  if (nameEl) {
+    attachInlineRename(nameEl, ag.id, ag.name || 'Agent', (val) => {
+      ag.name = val;
+      updateAgentUI(ag);
+    });
   }
 }
 
@@ -254,12 +307,19 @@ function showOfficePopover(canvas, char) {
   const ctxPct = (ag && ag.tokenUsage?.contextPercent);
   const ctxText = ctxPct != null ? `~${ctxPct}%` : '-';
 
+  // Pipeline room/stage detection
+  const roomCode = char.pipelineRoom || '-';
+  const roomName = (typeof getRoomDisplayName === 'function') ? getRoomDisplayName(roomCode) : roomCode;
+  const stageName = (typeof getStageDisplayName === 'function' && char.pipelineStage >= 0)
+    ? getStageDisplayName(char.pipelineStage) : null;
+  const locationText = stageName ? `${roomName} › ${stageName}` : roomName;
+
   popoverEl.innerHTML = `
     <div class="pop-header">
       <span class="pop-name">${name}</span>
       <div class="mc-agent-status ${stClass}" style="font-size:0.6rem">${status.toUpperCase()}</div>
     </div>
-    <div class="pop-row"><span>Project</span><span class="pop-val">${project}</span></div>
+    <div class="pop-row"><span>Room</span><span class="pop-val">${locationText}</span></div>
     <div class="pop-row"><span>Tool</span><span class="pop-val">${tool}</span></div>
     <div class="pop-row"><span>Model</span><span class="pop-val">${model}</span></div>
     <div class="pop-row"><span>Tokens</span><span class="pop-val">${formatNum(inputTok + outputTok)}</span></div>
@@ -267,6 +327,20 @@ function showOfficePopover(canvas, char) {
     <div class="pop-row"><span>Context</span><span class="pop-val">${ctxText}</span></div>
   `;
   popoverEl.style.display = 'block';
+
+  // Make the name clickable for rename
+  const popNameEl = popoverEl.querySelector('.pop-name');
+  if (popNameEl) {
+    const renameHandler = attachInlineRename(popNameEl, char.id, name, (val) => {
+      popNameEl.textContent = val;
+      const agLocal = state.agents.get(char.id);
+      if (agLocal) agLocal.name = val;
+    });
+    // Popover uses single-click instead of double-click
+    popNameEl.onclick = renameHandler;
+    popNameEl.ondblclick = null;
+    popNameEl.title = 'Click to rename';
+  }
 
   // Position near the character
   const rect = canvas.getBoundingClientRect();

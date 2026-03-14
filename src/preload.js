@@ -44,6 +44,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Mission Control Dashboard methods
   openWebDashboard: () => ipcRenderer.invoke('open-web-dashboard'),
 
+  // Agent rename
+  setAgentName: (agentId, name) => ipcRenderer.invoke('set-agent-name', agentId, name),
+  renameAgent: (agentId, currentName) => ipcRenderer.invoke('rename-agent', agentId, currentName),
+
   // Error Recovery methods
   executeRecoveryAction: (errorId, action) => ipcRenderer.invoke('execute-recovery-action', errorId, action)
 });

@@ -6,6 +6,8 @@
 
 const EventEmitter = require('events');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 const { formatSlugToDisplayName } = require('./utils');
 
 // Single source of truth: public/shared/avatars.json
@@ -24,12 +26,15 @@ class AgentManager extends EventEmitter {
   constructor() {
     super();
     this.agents = new Map();
+    this.customNames = new Map();
     this._pendingEmit = new Map(); // agentId → { timer, state } — UI emit debounce
     this._usedAvatarIndices = new Set(); // Currently used avatar indices
     this.config = {
       softLimitWarning: 50,  // Soft warning (does not block, only logs)
       stateDebounceMs: 500,  // Working→Thinking transition debounce (ms)
     };
+    this._customNamesPath = path.join(os.homedir(), '.claude', 'agent-names.json');
+    this._loadCustomNames();
   }
 
   start() {
@@ -87,7 +92,7 @@ class AgentManager extends EventEmitter {
       sessionId: entry.sessionId,
       agentId: entry.agentId,
       slug: entry.slug,
-      displayName: this.formatDisplayName(entry.slug, entry.projectPath),
+      displayName: this.formatDisplayName(agentId, entry.slug, entry.projectPath),
       projectPath: entry.projectPath,
       jsonlPath: entry.jsonlPath || (existingAgent ? existingAgent.jsonlPath : null),
       model: m('model'),
@@ -231,14 +236,57 @@ class AgentManager extends EventEmitter {
    * 2. basename of projectPath (e.g., "pixel-agent-desk-master")
    * 3. Fallback: "Agent"
    */
-  formatDisplayName(slug, projectPath) {
-    if (slug) {
-      return formatSlugToDisplayName(slug);
-    }
-    if (projectPath) {
-      return path.basename(projectPath);
-    }
+  formatDisplayName(agentId, slug, projectPath) {
+    const custom = this.customNames.get(agentId);
+    if (custom) return custom;
+    if (slug) return formatSlugToDisplayName(slug);
+    if (projectPath) return path.basename(projectPath);
     return 'Agent';
+  }
+
+  /** Persist custom name, update agent in-place, and emit update event */
+  applyCustomName(agentId, name) {
+    this.customNames.set(agentId, name);
+    this._saveCustomNames();
+    const agent = this.agents.get(agentId);
+    if (agent) {
+      agent.displayName = name;
+      this.emit('agent-updated', this.getAgentWithEffectiveState(agentId));
+    }
+  }
+
+  setCustomName(agentId, name) {
+    this.customNames.set(agentId, name);
+    this._saveCustomNames();
+  }
+
+  getCustomName(agentId) {
+    return this.customNames.get(agentId) || null;
+  }
+
+  _loadCustomNames() {
+    try {
+      if (fs.existsSync(this._customNamesPath)) {
+        const data = JSON.parse(fs.readFileSync(this._customNamesPath, 'utf8'));
+        for (const [id, name] of Object.entries(data)) {
+          this.customNames.set(id, name);
+        }
+        console.log(`[AgentManager] Loaded ${this.customNames.size} custom names`);
+      }
+    } catch (e) {
+      console.warn(`[AgentManager] Failed to load custom names: ${e.message}`);
+    }
+  }
+
+  _saveCustomNames() {
+    try {
+      fs.mkdirSync(path.dirname(this._customNamesPath), { recursive: true });
+      const tmp = this._customNamesPath + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(Object.fromEntries(this.customNames), null, 2), 'utf8');
+      fs.renameSync(tmp, this._customNamesPath);
+    } catch (e) {
+      console.warn(`[AgentManager] Failed to save custom names: ${e.message}`);
+    }
   }
 
   /**

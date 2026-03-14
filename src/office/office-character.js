@@ -40,6 +40,8 @@ var officeCharacters = {
       agentState: officeState,
       restTimer: 0,
       bubble: null,
+      pipelineRoom: null,
+      pipelineStage: -1,
       role: agentData.name || 'Agent',
       metadata: {
         name: agentData.name || 'Agent',
@@ -81,6 +83,17 @@ var officeCharacters = {
     char.metadata.type = agentData.type || char.metadata.type;
     char.metadata.lastMessage = agentData.lastMessage || char.metadata.lastMessage;
 
+    // Pipeline room change detection (tool changed → may need different desk)
+    if (typeof detectPipelineRoom === 'function' && char.deskIndex !== undefined) {
+      const newRoom = detectPipelineRoom(char);
+      const newStage = (newRoom === 'content' && typeof detectStage === 'function') ? detectStage(char) : -1;
+      if (newRoom !== char.pipelineRoom || (newRoom === 'content' && newStage !== char.pipelineStage)) {
+        // Room or stage changed — reassign desk (assignDesk handles release + re-pick)
+        this.assignDesk(agentData.id);
+        this._updateTarget(char);
+      }
+    }
+
     // State change → zone transition
     if (oldState !== newState) {
       const oldZone = STATE_ZONE_MAP[oldState] || 'idle';
@@ -98,6 +111,11 @@ var officeCharacters = {
         officeRenderer.spawnEffect('stateChange', char.x, char.y - 32, stateColor);
         if (newState === 'done') {
           officeRenderer.spawnEffect('confetti', char.x, char.y - 45);
+          // Track completion for TV board
+          if (typeof trackCompletion === 'function') {
+            var taskDesc = (char.metadata && char.metadata.tool) || 'task';
+            trackCompletion(char.role || 'Agent', taskDesc);
+          }
         } else if (newState === 'error') {
           officeRenderer.spawnEffect('warning', char.x, char.y - 65);
         }
@@ -114,25 +132,55 @@ var officeCharacters = {
 
   assignDesk: function (agentId) {
     const char = this.characters.get(agentId);
-    if (!char || char.deskIndex !== undefined) return;
+    if (!char) return;
 
-    // Collect available seats
-    const usedDesks = new Set(this.seatAssignments.keys());
-    const deskCoords = officeCoords.desk || [];
-    const available = [];
-    for (let i = 0; i < deskCoords.length; i++) {
-      if (!usedDesks.has(i)) available.push(i);
+    // Detect pipeline room and stage
+    const room = (typeof detectPipelineRoom === 'function') ? detectPipelineRoom(char) : 'command';
+    const stage = (room === 'content' && typeof detectStage === 'function') ? detectStage(char) : -1;
+
+    // Store room/stage on character for UI display
+    char.pipelineRoom = room;
+    char.pipelineStage = stage;
+
+    // If already seated in the correct room, don't reassign
+    if (char.deskIndex !== undefined) {
+      const candidateDesks = (typeof getDesksForRoom === 'function')
+        ? getDesksForRoom(room, stage) : null;
+      if (candidateDesks && candidateDesks.indexOf(char.deskIndex) !== -1) return;
+      // Wrong room — release current desk and reassign
+      this.releaseDesk(agentId);
     }
 
-    if (available.length === 0) {
-      // D6: Seats exceeded — overflow handling
+    // Get desks for the detected room (with stage filtering for content)
+    const usedDesks = new Set(this.seatAssignments.keys());
+    var candidates;
+    if (typeof getDesksForRoom === 'function') {
+      candidates = getDesksForRoom(room, stage).filter(function (i) { return !usedDesks.has(i); });
+      // Fallback: try any desk in the room if stage-specific are full
+      if (candidates.length === 0 && stage >= 0) {
+        candidates = getDesksForRoom(room, -1).filter(function (i) { return !usedDesks.has(i); });
+      }
+      // Fallback: try command room if target room is full
+      if (candidates.length === 0 && room !== 'command') {
+        candidates = getDesksForRoom('command', -1).filter(function (i) { return !usedDesks.has(i); });
+      }
+    } else {
+      // Fallback: original behavior if pipeline module not loaded
+      const deskCoords = officeCoords.desk || [];
+      candidates = [];
+      for (let i = 0; i < deskCoords.length; i++) {
+        if (!usedDesks.has(i)) candidates.push(i);
+      }
+    }
+
+    if (candidates.length === 0) {
       char.deskOverflow = true;
       return;
     }
 
-    // Deterministic random based on agent ID (same agent gets same preference)
+    // Deterministic selection within candidates
     const hash = avatarIndexFromId(agentId);
-    const idx = available[hash % available.length];
+    const idx = candidates[hash % candidates.length];
     char.deskIndex = idx;
     this.seatAssignments.set(idx, agentId);
   },

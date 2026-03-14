@@ -128,10 +128,22 @@ function createHookProcessor({ agentManager, sessionPids, debugLog, detectClaude
         }
         break;
 
-      case 'Stop':
+      case 'Stop': {
+        // Stop = agent finished current turn, session still alive (waiting for next prompt)
+        firstPreToolUseDone.delete(sessionId);
+        if (agentManager) {
+          const agent = agentManager.getAgent(sessionId);
+          const lastMsg = data.last_assistant_message || null;
+          if (agent) {
+            agentManager.updateAgent({ ...agent, sessionId, state: 'Waiting', currentTool: null, lastMessage: lastMsg }, 'hook');
+          }
+        }
+        break;
+      }
+
       case 'TaskCompleted': {
         firstPreToolUseDone.delete(sessionId);
-        if (event === 'TaskCompleted' && data.task_id) {
+        if (data.task_id) {
           debugLog(`[Hook] TaskCompleted: task=${data.task_id} subject="${data.task_subject || ''}" by ${data.teammate_name || sessionId.slice(0, 8)}`);
         }
         if (agentManager) {

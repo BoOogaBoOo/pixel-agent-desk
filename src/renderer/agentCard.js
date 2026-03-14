@@ -25,8 +25,15 @@ export function updateAgentState(agentId, container, agentOrState) {
   const bubble = container.querySelector('.agent-bubble');
   const character = container.querySelector('.agent-character');
 
+  // Update display name if changed (e.g. after rename)
+  const nameBadge = container.querySelector('.agent-name');
+  const newDisplayName = isAgentObj ? agentOrState.displayName : null;
+  if (nameBadge && newDisplayName && nameBadge.textContent !== newDisplayName) {
+    nameBadge.textContent = newDisplayName;
+  }
+
   // Update ARIA label
-  const agentDisplayName = container.querySelector('.agent-name')?.textContent || 'Agent';
+  const agentDisplayName = nameBadge?.textContent || 'Agent';
   container.setAttribute('aria-label', `${agentDisplayName} - ${config.label}`);
 
   // Update container class + data-state for CSS selector targeting
@@ -203,20 +210,31 @@ export function createAgentCard(agent) {
   const typeClass = agent.isSubagent ? 'type-sub' : (agent.isTeammate ? 'type-team' : 'type-main');
   card.classList.add(typeClass);
 
-  // Top badge — unified to project basename
+  // Top badge — custom name (double-click to rename)
+  const nameBadge = document.createElement('div');
+  nameBadge.className = 'agent-name';
+  nameBadge.textContent = agent.displayName || 'Agent';
+  nameBadge.title = 'Double-click to rename';
+  nameBadge.style.cursor = 'pointer';
+
+  // Bottom badge — project folder basename
   const basename = agent.projectPath ? agent.projectPath.replace(/[\\/]+$/, '').split(/[\\/]/).pop() : '';
   const typeTag = document.createElement('span');
   typeTag.className = `type-tag ${typeClass}`;
   typeTag.textContent = basename || 'Agent';
   typeTag.title = agent.projectPath || '';
 
-  // Agent name — show slug-based name only (omit project folder name)
-  const nameBadge = document.createElement('div');
-  nameBadge.className = 'agent-name';
-  const hasSlugName = agent.slug && agent.displayName && agent.displayName !== 'Agent';
-  nameBadge.textContent = hasSlugName ? agent.displayName : '';
-  nameBadge.title = agent.projectPath || '';
-  if (!hasSlugName) nameBadge.style.display = 'none';
+  nameBadge.ondblclick = async (e) => {
+    e.stopPropagation();
+    const current = nameBadge.textContent;
+    // Use IPC dialog — floating window is non-focusable so prompt()/inline input won't work
+    if (window.electronAPI && window.electronAPI.renameAgent) {
+      const newName = await window.electronAPI.renameAgent(agent.id, current);
+      if (newName && newName !== current) {
+        nameBadge.textContent = newName;
+      }
+    }
+  };
 
   // Timer element (pre-created to avoid dynamic DOM insertion in updateAgentState)
   const timerEl = document.createElement('div');
@@ -228,11 +246,11 @@ export function createAgentCard(agent) {
 
   // Assemble card (satellite tray first = visually top)
   card.appendChild(satelliteTray);
-  card.appendChild(typeTag);
+  card.appendChild(nameBadge);
   card.appendChild(bubble);
   card.appendChild(timerEl);
   card.appendChild(character);
-  card.appendChild(nameBadge);
+  card.appendChild(typeTag);
 
   // Terminal focus button
   const focusBtn = document.createElement('button');
