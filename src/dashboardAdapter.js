@@ -99,6 +99,7 @@ function adaptAgentToDashboard(pixelAgent) {
       teammateName: pixelAgent.teammateName || null,
       teamName: pixelAgent.teamName || null,
       endReason: pixelAgent.endReason || null,
+      hasBackgroundWork: pixelAgent.hasBackgroundWork || false,
       source: 'pixel-agent-desk'
     },
     timing: {

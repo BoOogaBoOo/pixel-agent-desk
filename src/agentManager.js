@@ -117,6 +117,7 @@ class AgentManager extends EventEmitter {
       isSubagent: entry.isSubagent || (existingAgent ? existingAgent.isSubagent : false),
       isTeammate: entry.isTeammate || (existingAgent ? existingAgent.isTeammate : false),
       parentId: entry.parentId || (existingAgent ? existingAgent.parentId : null),
+      hasBackgroundWork: entry.hasBackgroundWork || (existingAgent ? existingAgent.hasBackgroundWork : false),
       state: newState,
       activeStartTime,
       lastDuration,

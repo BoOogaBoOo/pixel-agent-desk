@@ -52,10 +52,93 @@ function handlePidReconnect({ agentManager, sessionPids, sessionId, data, debugL
   });
 }
 
+// ─── Background Task Detection ───
+const BG_BASH_PATTERNS = [
+  /(?:^|[^&])\s*&\s*$/m,     // trailing & (not &&)
+  /\bnohup\b/,
+  /\bdisown\b/,
+  /\bsetsid\b/,
+  /\bscreen\s+-[dS]/,
+  />\s*\/dev\/null\s+2>&1\s*&/,
+];
+const BG_PID_PATTERNS = [/\[\d+\]\s+\d+/, /nohup:.*appending/];
+const BG_STOP_HINTS = [
+  /\bbackground\b/i, /\brunning\b.*\b(script|process|task|pipeline)\b/i,
+  /\bkicked off\b/i, /\bin the background\b/i, /\bovernight\b/i,
+];
+const BG_DECAY_MS = 2 * 60 * 60 * 1000; // 2 hours
+
+class BackgroundTaskTracker {
+  constructor() { this.sessions = new Map(); }
+
+  _get(sessionId) {
+    if (!this.sessions.has(sessionId)) {
+      this.sessions.set(sessionId, { openSubagents: new Set(), bgBashCount: 0, bgBashLastAt: 0, taskOutputSeen: false, stopHints: false });
+    }
+    return this.sessions.get(sessionId);
+  }
+
+  onPreToolUse(sessionId, toolName, toolInput) {
+    const s = this._get(sessionId);
+    if (toolName === 'Bash') {
+      const cmd = (typeof toolInput === 'object' && toolInput) ? (toolInput.command || '') : String(toolInput || '');
+      const hasBgFlag = typeof toolInput === 'object' && toolInput && toolInput.run_in_background;
+      if (hasBgFlag || BG_BASH_PATTERNS.some(p => p.test(cmd))) {
+        s.bgBashCount++;
+        s.bgBashLastAt = Date.now();
+      }
+    }
+    if (toolName === 'TaskOutput') s.taskOutputSeen = true;
+  }
+
+  onPostToolUse(sessionId, toolName, response) {
+    if (toolName === 'Bash' && response) {
+      const text = typeof response === 'string' ? response : JSON.stringify(response);
+      if (BG_PID_PATTERNS.some(p => p.test(text))) {
+        const s = this._get(sessionId);
+        s.bgBashCount++;
+        s.bgBashLastAt = Date.now();
+      }
+    }
+  }
+
+  onSubagentStart(sessionId, subId) {
+    this._get(sessionId).openSubagents.add(subId);
+  }
+
+  onSubagentStop(sessionId, subId) {
+    const s = this.sessions.get(sessionId);
+    if (s) s.openSubagents.delete(subId);
+  }
+
+  onStop(sessionId, lastMessage) {
+    const s = this._get(sessionId);
+    s.stopHints = lastMessage ? BG_STOP_HINTS.some(p => p.test(lastMessage)) : false;
+  }
+
+  onSessionEnd(sessionId) { this.sessions.delete(sessionId); }
+
+  hasBackgroundWork(sessionId) {
+    const s = this.sessions.get(sessionId);
+    if (!s) return false;
+    // Layer 1: open subagents (definitive)
+    if (s.openSubagents.size > 0) return true;
+    // Layer 2: recent background bash
+    const recentBash = s.bgBashCount > 0 && (Date.now() - s.bgBashLastAt) < BG_DECAY_MS;
+    // Layer 2b: TaskOutput seen
+    const l2Score = (recentBash ? 1 : 0) + (s.taskOutputSeen ? 1 : 0);
+    if (l2Score >= 2) return true;
+    // Layer 2 + Layer 3 combo
+    if (l2Score >= 1 && s.stopHints) return true;
+    return false;
+  }
+}
+
 function createHookProcessor({ agentManager, sessionPids, debugLog, detectClaudePidByTranscript }) {
   // Internal state
   const pendingSessionStarts = [];
   const firstPreToolUseDone = new Map(); // sessionId -> boolean
+  const bgTracker = new BackgroundTaskTracker();
 
   function processHookEvent(data) {
     const event = data.hook_event_name;
@@ -131,11 +214,13 @@ function createHookProcessor({ agentManager, sessionPids, debugLog, detectClaude
       case 'Stop': {
         // Stop = agent finished current turn, session still alive (waiting for next prompt)
         firstPreToolUseDone.delete(sessionId);
+        bgTracker.onStop(sessionId, data.last_assistant_message || null);
         if (agentManager) {
           const agent = agentManager.getAgent(sessionId);
           const lastMsg = data.last_assistant_message || null;
+          const hasBg = bgTracker.hasBackgroundWork(sessionId);
           if (agent) {
-            agentManager.updateAgent({ ...agent, sessionId, state: 'Waiting', currentTool: null, lastMessage: lastMsg }, 'hook');
+            agentManager.updateAgent({ ...agent, sessionId, state: 'Waiting', currentTool: null, lastMessage: lastMsg, hasBackgroundWork: hasBg }, 'hook');
           }
         }
         break;
@@ -161,6 +246,7 @@ function createHookProcessor({ agentManager, sessionPids, debugLog, detectClaude
           firstPreToolUseDone.set(sessionId, true);
           debugLog(`[Hook] PreToolUse ignored (first = session init)`);
         } else if (agentManager) {
+          bgTracker.onPreToolUse(sessionId, data.tool_name, data.tool_input);
           const agent = agentManager.getAgent(sessionId);
           if (agent) {
             agentManager.updateAgent({ ...agent, sessionId, state: 'Working', currentTool: data.tool_name || null }, 'hook');
@@ -182,6 +268,7 @@ function createHookProcessor({ agentManager, sessionPids, debugLog, detectClaude
           }
         }
 
+        bgTracker.onPostToolUse(sessionId, data.tool_name, data.tool_response);
         handlePidReconnect({ agentManager, sessionPids, sessionId, data, debugLog, detectClaudePidByTranscript });
         break;
       }
@@ -217,6 +304,7 @@ function createHookProcessor({ agentManager, sessionPids, debugLog, detectClaude
       case 'SubagentStart': {
         const subId = data.agent_id || data.subagent_session_id;
         if (subId) {
+          bgTracker.onSubagentStart(sessionId, subId);
           handleSessionStart(subId, data.cwd || '', 0, false, true, 'Working', sessionId, {
             jsonlPath: data.agent_transcript_path || data.transcript_path || null,
             agentType: data.agent_type || null,
@@ -229,6 +317,7 @@ function createHookProcessor({ agentManager, sessionPids, debugLog, detectClaude
       case 'SubagentStop': {
         const subId = data.agent_id || data.subagent_session_id;
         if (subId) {
+          bgTracker.onSubagentStop(sessionId, subId);
           if (data.last_assistant_message && agentManager) {
             const subAgent = agentManager.getAgent(subId);
             if (subAgent) {
@@ -328,6 +417,7 @@ function createHookProcessor({ agentManager, sessionPids, debugLog, detectClaude
   function cleanupAgentResources(sessionId) {
     firstPreToolUseDone.delete(sessionId);
     sessionPids.delete(sessionId);
+    bgTracker.onSessionEnd(sessionId);
     debugLog(`[Cleanup] Resources cleared for ${sessionId.slice(0, 8)}`);
   }
 

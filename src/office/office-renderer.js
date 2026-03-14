@@ -29,9 +29,12 @@ var officeRenderer = {
     // 3. Parse coordinates
     await parseMapCoordinates(officeLayers.width, officeLayers.height);
 
-    // 3b. Partition desks into pipeline rooms
+    // 3b. Partition desks into pipeline rooms + idle zones
     if (typeof partitionDesksByRoom === 'function' && officeCoords.desk && officeCoords.desk.length > 0) {
       partitionDesksByRoom(officeCoords.desk);
+    }
+    if (typeof partitionIdleByZone === 'function' && officeCoords.idle && officeCoords.idle.length > 0) {
+      partitionIdleByZone(officeCoords.idle);
     }
 
     // 3c. Init office cat

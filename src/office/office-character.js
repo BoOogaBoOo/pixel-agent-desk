@@ -53,6 +53,7 @@ var officeCharacters = {
         tool: agentData.currentTool || null,
         type: agentData.type || 'main',
         status: agentData.status || 'idle',
+        hasBackgroundWork: (agentData.metadata && agentData.metadata.hasBackgroundWork) || false,
         lastMessage: agentData.lastMessage || null,
       },
     };
@@ -84,6 +85,7 @@ var officeCharacters = {
     char.metadata.project = agentData.project || char.metadata.project;
     char.metadata.tool = agentData.currentTool || null;
     char.metadata.status = agentData.status || 'idle';
+    char.metadata.hasBackgroundWork = (agentData.metadata && agentData.metadata.hasBackgroundWork) || char.metadata.hasBackgroundWork;
     char.metadata.type = agentData.type || char.metadata.type;
     char.metadata.lastMessage = agentData.lastMessage || char.metadata.lastMessage;
 
@@ -252,6 +254,7 @@ var officeCharacters = {
     if (char.agentState === 'working' || char.agentState === 'thinking' ||
         char.agentState === 'error' || char.agentState === 'help') {
       char.restTimer = 0;
+      char.lastActivityTime = Date.now(); // reset for idle duration tracking
 
       // D6: Overflow agent — move to idle coords near desk (standing work)
       if (char.deskOverflow) {
@@ -284,16 +287,26 @@ var officeCharacters = {
       return;
     }
 
-    // IDLE / WAITING / DONE → idle zone
+    // IDLE / WAITING / DONE → zone-based idle routing
     if (char.path.length > 0 && char.pathIndex < char.path.length) return;
 
-    const isAtIdle = coords.idle.some(function (p) {
+    // Track last activity time for idle duration
+    if (!char.lastActivityTime && (char.agentState === 'idle' || char.agentState === 'done')) {
+      char.lastActivityTime = Date.now();
+    }
+
+    // Pick target zone based on state
+    var zoneName = (typeof pickIdleZone === 'function') ? pickIdleZone(char) : null;
+    var zoneSpots = (zoneName && typeof idleByZone !== 'undefined' && idleByZone[zoneName] && idleByZone[zoneName].length > 0)
+      ? idleByZone[zoneName] : coords.idle;
+
+    const isAtTarget = zoneSpots.some(function (p) {
       return Math.abs(p.x - char.x) < 5 && Math.abs(p.y - char.y) < 5;
     });
 
-    if (isAtIdle) return;
+    if (isAtTarget) return;
 
-    // Find unoccupied idle spot
+    // Find unoccupied spot in target zone (fallback to any idle spot)
     const occupied = {};
     const self = this;
     this.characters.forEach(function (a) {
@@ -307,9 +320,16 @@ var officeCharacters = {
       occupied[ax + ',' + ay] = true;
     });
 
-    const valid = coords.idle.filter(function (p) {
+    var valid = zoneSpots.filter(function (p) {
       return !occupied[Math.floor(p.x) + ',' + Math.floor(p.y)];
     });
+
+    // Fallback to any idle spot if preferred zone is full
+    if (valid.length === 0) {
+      valid = coords.idle.filter(function (p) {
+        return !occupied[Math.floor(p.x) + ',' + Math.floor(p.y)];
+      });
+    }
 
     if (valid.length > 0) {
       const dest = valid[Math.floor(Math.random() * valid.length)];

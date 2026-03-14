@@ -59,6 +59,55 @@ var DESK_TRAITS = {
 // Desk index → traits array (populated by partitionDesksByRoom)
 var deskTraits = {};  // e.g. { 0: ['dev'], 8: ['pipeline'], 12: ['qa'] }
 
+// ─── Idle zone partitioning ───
+// Idle spots partitioned by room for mood/state-based routing
+var IDLE_ZONES = {
+  cafe:    { minX: 0,   maxX: 450, minY: 0,   maxY: 170 },  // Top-left patio/cafe
+  lounge:  { minX: 450, maxX: 999, minY: 0,   maxY: 350 },  // Top-right living room
+  library: { minX: 250, maxX: 450, minY: 300,  maxY: 450 },  // Mid-center bookshelves
+  server:  { minX: 0,   maxX: 250, minY: 300,  maxY: 500 },  // Mid-left server room (no idle spots by default)
+};
+
+var idleByZone = { cafe: [], lounge: [], library: [], server: [] };
+
+/** Partition idle spots into zones. Call after parseMapCoordinates(). */
+function partitionIdleByZone(idleCoords) {
+  idleByZone = { cafe: [], lounge: [], library: [], server: [] };
+  for (var i = 0; i < idleCoords.length; i++) {
+    var s = idleCoords[i];
+    var assigned = false;
+    for (var zone in IDLE_ZONES) {
+      var b = IDLE_ZONES[zone];
+      if (s.x >= b.minX && s.x <= b.maxX && s.y >= b.minY && s.y <= b.maxY) {
+        idleByZone[zone].push(s);
+        assigned = true;
+        break;
+      }
+    }
+    if (!assigned) idleByZone.library.push(s); // default
+  }
+  console.log('[Pipeline] Idle zones — cafe:', idleByZone.cafe.length,
+    'lounge:', idleByZone.lounge.length, 'library:', idleByZone.library.length,
+    'server:', idleByZone.server.length);
+}
+
+/**
+ * Pick the right idle zone for an agent based on state.
+ * @param {object} agent - office character
+ * @returns {string} zone name: 'cafe', 'lounge', 'library', 'server'
+ */
+function pickIdleZone(agent) {
+  // Error/Help → server room (diagnostics)
+  if (agent.agentState === 'error' || agent.agentState === 'help') return 'server';
+  // Background work → cafe (resting while work runs)
+  if (agent.metadata && agent.metadata.hasBackgroundWork) return 'cafe';
+  // Recently finished (<2 min) → library (standby)
+  var idleMs = Date.now() - (agent.lastActivityTime || Date.now());
+  if (idleMs < 120000) return 'library';
+  // Long idle → lounge (break)
+  return 'lounge';
+}
+
 // Room→trait mapping for detectPipelineRoom results
 var ROOM_TO_TRAIT = {
   content: 'pipeline',
