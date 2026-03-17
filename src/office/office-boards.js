@@ -59,6 +59,25 @@ function onPipelineStatusUpdate(data) {
   if (data && data.key) {
     pipelineStatusCache[data.key] = { status: data.status, detail: data.detail, timestamp: data.timestamp };
   }
+  // If status contains a phase number, update the CA tracker
+  if (typeof setCAPhase === 'function' && data) {
+    var text = (data.status || '') + ' ' + (data.detail || '');
+    var m = text.match(/phase[- ]?(\d)/i);
+    if (m) {
+      var phase = parseInt(m[1]);
+      // Find CApipe agent name
+      if (typeof officeCharacters !== 'undefined') {
+        var chars = officeCharacters.getCharacterArray();
+        for (var i = 0; i < chars.length; i++) {
+          if (/capipe|ca-pipe|ca_pipe/i.test(chars[i].role || '')) {
+            setCAPhase(chars[i].role, phase);
+            break;
+          }
+        }
+      }
+    }
+  }
+  if (typeof updateCAPipelineTracker === 'function') updateCAPipelineTracker();
 }
 
 /**

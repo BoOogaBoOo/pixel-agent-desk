@@ -42,6 +42,7 @@ var officeCharacters = {
       bubble: null,
       pipelineRoom: null,
       pipelineStage: -1,
+      caPhase: 0,         // 0=not in CA pipeline, 1-7=phase, 8=done
       mood: 'neutral',     // neutral, happy, focused, tired, frustrated
       moodTimer: 0,
       errorCount: 0,
@@ -89,6 +90,15 @@ var officeCharacters = {
     char.metadata.type = agentData.type || char.metadata.type;
     char.metadata.lastMessage = agentData.lastMessage || char.metadata.lastMessage;
 
+    // CA phase change detection (phase changed → move to new phase desk)
+    if (typeof detectCAPhase === 'function' && char.caPhase > 0) {
+      const newCAPhase = detectCAPhase(char);
+      if (newCAPhase > 0 && newCAPhase !== char.caPhase) {
+        this.assignDesk(agentData.id);
+        this._updateTarget(char);
+      }
+    }
+
     // Pipeline room change detection (tool changed → may need different desk)
     if (typeof detectPipelineRoom === 'function' && char.deskIndex !== undefined) {
       const newRoom = detectPipelineRoom(char);
@@ -105,10 +115,23 @@ var officeCharacters = {
       const oldZone = STATE_ZONE_MAP[oldState] || 'idle';
       const newZone = STATE_ZONE_MAP[newState] || 'idle';
 
-      if (newZone === 'desk' && char.deskIndex === undefined) {
+      // CA pipeline done → release desk, walk to lounge with confetti
+      var caDonePhase = (typeof CA_DONE_PHASE !== 'undefined') ? CA_DONE_PHASE : 10;
+      if (newState === 'done' && char.caPhase > 0) {
+        this.releaseDesk(agentData.id);
+        char.caPhase = caDonePhase;
+        if (typeof officeRenderer !== 'undefined') {
+          officeRenderer.spawnEffect('confetti', char.x, char.y - 45);
+        }
+        if (typeof updateCAPipelineTracker === 'function') updateCAPipelineTracker();
+        // Falls through to normal idle routing (→ lounge)
+      } else if (newZone === 'desk' && char.deskIndex === undefined) {
         this.assignDesk(agentData.id);
       } else if (newZone === 'idle' && oldZone === 'desk') {
-        this.releaseDesk(agentData.id);
+        // CA pipeline error → stay at desk (don't release)
+        if (!(char.caPhase > 0 && newState === 'error')) {
+          this.releaseDesk(agentData.id);
+        }
       }
 
       // Trigger effect on state change
@@ -141,6 +164,38 @@ var officeCharacters = {
     const char = this.characters.get(agentId);
     if (!char) return;
 
+    // ─── CA Pipeline phase override ───
+    // If agent is in a CA pipeline phase, assign to the specific phase desk
+    if (typeof detectCAPhase === 'function') {
+      const caPhase = detectCAPhase(char);
+      if (caPhase > 0) {
+        const phaseDeskIdx = (typeof getCAPhaseDesk === 'function') ? getCAPhaseDesk(caPhase) : -1;
+        if (phaseDeskIdx >= 0) {
+          // Release old desk if different
+          if (char.deskIndex !== undefined && char.deskIndex !== phaseDeskIdx) {
+            this.releaseDesk(agentId);
+          }
+          if (char.deskIndex === phaseDeskIdx) return; // already at correct phase desk
+          // Release anyone else at this desk (phase desks are exclusive)
+          if (this.seatAssignments.has(phaseDeskIdx)) {
+            const prevAgent = this.seatAssignments.get(phaseDeskIdx);
+            if (prevAgent !== agentId) {
+              const prevChar = this.characters.get(prevAgent);
+              if (prevChar) { prevChar.deskIndex = undefined; prevChar.deskOverflow = false; }
+              this.seatAssignments.delete(phaseDeskIdx);
+            }
+          }
+          char.deskIndex = phaseDeskIdx;
+          char.pipelineRoom = 'content';
+          char.pipelineStage = caPhase;
+          // Never regress caPhase
+          if (caPhase > (char.caPhase || 0)) char.caPhase = caPhase;
+          this.seatAssignments.set(phaseDeskIdx, agentId);
+          return;
+        }
+      }
+    }
+
     // Detect pipeline room and stage
     const room = (typeof detectPipelineRoom === 'function') ? detectPipelineRoom(char) : 'command';
     const stage = (room === 'content' && typeof detectStage === 'function') ? detectStage(char) : -1;
@@ -158,18 +213,32 @@ var officeCharacters = {
       this.releaseDesk(agentId);
     }
 
+    // Conference room desks are reserved for CA pipeline agents only
+    // Non-CA agents go to command (dev) desks
+    var reservedDesks = (typeof caPhaseDeskIndices !== 'undefined') ? new Set(caPhaseDeskIndices) : new Set();
+    var effectiveRoom = room;
+    if (char.caPhase === 0 && (room === 'content' || room === 'qa')) {
+      effectiveRoom = 'command'; // redirect non-CA agents to dev desks
+    }
+
     // Get desks for the detected room (with stage filtering for content)
     const usedDesks = new Set(this.seatAssignments.keys());
     var candidates;
     if (typeof getDesksForRoom === 'function') {
-      candidates = getDesksForRoom(room, stage).filter(function (i) { return !usedDesks.has(i); });
+      candidates = getDesksForRoom(effectiveRoom, stage).filter(function (i) {
+        return !usedDesks.has(i) && !reservedDesks.has(i);
+      });
       // Fallback: try any desk in the room if stage-specific are full
       if (candidates.length === 0 && stage >= 0) {
-        candidates = getDesksForRoom(room, -1).filter(function (i) { return !usedDesks.has(i); });
+        candidates = getDesksForRoom(effectiveRoom, -1).filter(function (i) {
+          return !usedDesks.has(i) && !reservedDesks.has(i);
+        });
       }
       // Fallback: try command room if target room is full
-      if (candidates.length === 0 && room !== 'command') {
-        candidates = getDesksForRoom('command', -1).filter(function (i) { return !usedDesks.has(i); });
+      if (candidates.length === 0 && effectiveRoom !== 'command') {
+        candidates = getDesksForRoom('command', -1).filter(function (i) {
+          return !usedDesks.has(i) && !reservedDesks.has(i);
+        });
       }
     } else {
       // Fallback: original behavior if pipeline module not loaded
@@ -210,8 +279,8 @@ var officeCharacters = {
       self._updateMood(char, deltaMs);
       tickOfficeAnimation(char, deltaMs);
 
-      // Working sparkles
-      if (char.agentState === 'working' && Math.random() < 0.05) {
+      // Working sparkles (throttled: ~1 per 3 seconds per agent)
+      if (char.agentState === 'working' && Math.random() < 0.005) {
         if (typeof officeRenderer !== 'undefined') {
           officeRenderer.spawnEffect('focus', char.x, char.y - 40);
         }

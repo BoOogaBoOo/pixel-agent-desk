@@ -128,6 +128,33 @@ var officeRenderer = {
 
       const img = isAtDesk ? this.laptopOpenImages[spot.dir] : this.laptopImages[spot.dir];
       if (img) ctx.drawImage(img, spot.x, spot.y);
+
+      // Draw CA phase label above laptop
+      if (typeof getDeskLabel === 'function') {
+        const label = getDeskLabel(seatId);
+        if (label) {
+          ctx.save();
+          ctx.font = 'bold 6px monospace';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'bottom';
+          // Label colors: DONE=green, others=amber
+          var labelColor = (label === 'DONE') ? '#4ade80' : '#f59e0b';
+          // Background pill
+          var lx = spot.x + 16; // center of 32px tile
+          var ly = spot.y - 2;
+          var tw = ctx.measureText(label).width;
+          var pw = tw + 6;
+          var ph = 9;
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+          ctx.beginPath();
+          ctx.roundRect(lx - pw / 2, ly - ph, pw, ph, 3);
+          ctx.fill();
+          // Label text
+          ctx.fillStyle = labelColor;
+          ctx.fillText(label, lx, ly - 2);
+          ctx.restore();
+        }
+      }
     }
 
     // 3. Characters (Y-sorted)
@@ -137,7 +164,7 @@ var officeRenderer = {
       const agent = sorted[j];
 
       if (agent.agentState === 'error') {
-        if (Math.random() < 0.1) this.spawnEffect('warning', agent.x, agent.y - 65);
+        if (Math.random() < 0.008) this.spawnEffect('warning', agent.x, agent.y - 65);
       }
 
       const isSubType = agent.metadata && agent.metadata.type === 'sub';

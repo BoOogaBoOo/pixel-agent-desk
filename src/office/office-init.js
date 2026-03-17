@@ -53,22 +53,30 @@ async function initOffice() {
   // Remove loading indicator
   if (loadingEl) loadingEl.remove();
 
+  // Restore CA pipeline phase from server (survives page reloads)
+  if (typeof restoreCAPhaseFromServer === 'function') {
+    restoreCAPhaseFromServer();
+  }
+
   officeInitialized = true;
 }
 
 /** Called from dashboard SSE agent.created handler */
 function officeOnAgentCreated(data) {
   if (officeInitialized) officeCharacters.addCharacter(data);
+  if (typeof updateCAPipelineTracker === 'function') updateCAPipelineTracker();
 }
 
 /** Called from dashboard SSE agent.updated handler */
 function officeOnAgentUpdated(data) {
   if (officeInitialized) officeCharacters.updateCharacter(data);
+  if (typeof updateCAPipelineTracker === 'function') updateCAPipelineTracker();
 }
 
 /** Called from dashboard SSE agent.removed handler */
 function officeOnAgentRemoved(data) {
   if (officeInitialized) officeCharacters.removeCharacter(data.id);
+  if (typeof updateCAPipelineTracker === 'function') updateCAPipelineTracker();
 }
 
 function stopOffice() {

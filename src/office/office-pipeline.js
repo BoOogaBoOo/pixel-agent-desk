@@ -44,6 +44,161 @@ var STAGE_PATTERNS = [
   [/promote/, /publish/, /insert/, /carousel/, /mcq-card/],
 ];
 
+// ─── CA Pipeline Phase System (7 phases + done seat) ───
+// Maps .ca/ orchestrator phases to specific seats in the conference room.
+// Phase detection via prompt filenames, task.yaml state, or tool activity.
+var CA_PHASE_DEFS = [
+  { phase: 1, label: 'P1 Ingest',     short: '1', patterns: [/phase-1/, /ingest/, /scrape-all/, /fetch-content/] },
+  { phase: 2, label: 'P2 Editorial',   short: '2', patterns: [/phase-2/, /editorial/, /daily-digest/, /write.*digest/] },
+  { phase: 3, label: 'P3a Generate',   short: '3', patterns: [/phase-3a/, /generate.*mcq/, /mcq-cascade/, /digest-mcq/] },
+  { phase: 4, label: 'P3b Audit',      short: '4', patterns: [/phase-3b/, /audit/, /blind-solve/, /pre-screen/] },
+  { phase: 5, label: 'P4 Enrich',      short: '5', patterns: [/phase-4/, /enrich/, /lkg/, /concept.*link/] },
+  { phase: 6, label: 'P5 Connect',     short: '6', patterns: [/phase-5/, /connect/] },
+  { phase: 7, label: 'P6 Publish',     short: '7', patterns: [/phase-6/, /publish/, /verify.*publish/, /final.*check/] },
+  { phase: 8, label: 'P7 Media',       short: '8', patterns: [/phase-7/, /media/, /tts/, /carousel/, /reel/, /generate-ca-reel/, /generate-ca-carousel/] },
+  { phase: 9, label: 'P8 Distribute',  short: '9', patterns: [/phase-8/, /distribut/, /reddit.*post/, /telegram.*post/, /upload.*youtube/, /facebook.*post/] },
+];
+// No dedicated done seat — agent goes to lounge with confetti
+var CA_DONE_PHASE = 10; // caPhase=10 means all 9 phases complete
+
+// Desk indices assigned to CA phases (populated by assignCAPhaseDeskIndices after partitioning)
+// Index 0-6 = phases 1-7, index 7 = done seat
+var caPhaseDeskIndices = []; // length 8
+
+// Phase labels for rendering on desks (deskIndex → label string)
+var caDeskLabels = {}; // e.g. { 8: 'INGEST', 9: 'EDITORIAL', ... }
+
+/**
+ * Assign 8 conference-room desks to CA pipeline phases.
+ * Call after partitionDesksByRoom(). Uses pipeline+qa desks (both tables).
+ * Returns true if 8 seats were found.
+ */
+function assignCAPhaseDeskIndices() {
+  // Gather all desks in the conference area (pipeline + qa traits = 2 tables)
+  var conferenceDesks = [];
+  for (var idx in deskTraits) {
+    var i = parseInt(idx);
+    var traits = deskTraits[i];
+    if (traits.indexOf('pipeline') !== -1 || traits.indexOf('qa') !== -1) {
+      conferenceDesks.push(i);
+    }
+  }
+  // Sort by desk index for deterministic left→right, top→bottom ordering
+  conferenceDesks.sort(function (a, b) { return a - b; });
+
+  // Need 9 desks for 9 phases (no done seat — agent goes to lounge)
+  var needed = CA_PHASE_DEFS.length; // 9
+  if (conferenceDesks.length < needed) {
+    // Borrow nearest dev desks to fill the gap
+    var devDesks = [];
+    for (var di in deskTraits) {
+      if (deskTraits[di].indexOf('dev') !== -1) devDesks.push(parseInt(di));
+    }
+    // Sort dev desks by proximity to conference area (highest index = closest)
+    devDesks.sort(function (a, b) { return b - a; });
+    var extra = devDesks.slice(0, needed - conferenceDesks.length);
+    conferenceDesks = conferenceDesks.concat(extra);
+    console.log('[Pipeline] Borrowed', extra.length, 'dev desk(s) for CA phases:', extra);
+  }
+  caPhaseDeskIndices = conferenceDesks.slice(0, needed);
+
+  // Build label map
+  caDeskLabels = {};
+  for (var p = 0; p < CA_PHASE_DEFS.length && p < caPhaseDeskIndices.length; p++) {
+    caDeskLabels[caPhaseDeskIndices[p]] = CA_PHASE_DEFS[p].short;
+  }
+
+  console.log('[Pipeline] CA phase desks assigned:', caPhaseDeskIndices, 'labels:', caDeskLabels);
+  return caPhaseDeskIndices.length >= 8;
+}
+
+/**
+ * Detect which CA pipeline phase an agent is in (1-7), or 0 if not in CA pipeline.
+ * Checks agent activity text + agent name against CA_PHASE_DEFS patterns.
+ */
+function detectCAPhase(agent) {
+  var text = _getAgentActivityText(agent);
+
+  // Also include agent name/role in detection text (CApipe, ca-pipe, etc.)
+  var agentName = (agent.role || '').toLowerCase();
+  if (agent.metadata && agent.metadata.name) agentName += ' ' + agent.metadata.name.toLowerCase();
+  var fullText = (text + ' ' + agentName).toLowerCase();
+
+  // Check if this is a CA pipeline agent — MUST be named CApipe/ca-pipe/ca_pipe
+  // Activity-only signals (ca-pipeline, phase-1) are NOT enough — prevents false positives
+  var isCANamedAgent = /capipe|ca-pipe|ca_pipe/.test(agentName);
+  if (!isCANamedAgent) return 0;
+
+  // Try to match specific phase from activity text
+  for (var p = 0; p < CA_PHASE_DEFS.length; p++) {
+    var patterns = CA_PHASE_DEFS[p].patterns;
+    for (var i = 0; i < patterns.length; i++) {
+      if (patterns[i].test(fullText)) return CA_PHASE_DEFS[p].phase;
+    }
+  }
+
+  // CA agent detected but no specific phase matched — check pipeline status cache
+  if (typeof pipelineStatusCache !== 'undefined') {
+    var pStatus = pipelineStatusCache[agent.id];
+    if (pStatus && pStatus.detail) {
+      var phaseMatch = pStatus.detail.match(/phase[- ]?(\d)/i);
+      if (phaseMatch) {
+        var phaseNum = parseInt(phaseMatch[1]);
+        if (phaseNum >= 1 && phaseNum <= 7) return phaseNum;
+      }
+    }
+  }
+
+  // Default: if agent is named CApipe, use pipeline status or keep highest phase
+  if (/capipe|ca-pipe|ca_pipe/.test(agentName)) {
+    // Check pipeline status cache for explicit phase (set via POST /api/pipeline-status)
+    if (typeof pipelineStatusCache !== 'undefined') {
+      // Check by agent ID and global
+      var keys = [agent.id, '_global'];
+      for (var k = 0; k < keys.length; k++) {
+        var ps = pipelineStatusCache[keys[k]];
+        if (ps && ps.detail) {
+          var pm = ps.detail.match(/phase[- ]?(\d)/i);
+          if (pm) {
+            var pn = parseInt(pm[1]);
+            if (pn >= 1 && pn <= 7) return Math.max(pn, agent.caPhase || 0);
+          }
+        }
+        if (ps && ps.status) {
+          var sm = ps.status.match(/phase[- ]?(\d)/i);
+          if (sm) {
+            var sn = parseInt(sm[1]);
+            if (sn >= 1 && sn <= 7) return Math.max(sn, agent.caPhase || 0);
+          }
+        }
+      }
+    }
+    // Never regress — keep highest phase seen (including done)
+    if (agent.caPhase && agent.caPhase > 0) return agent.caPhase;
+    return 1; // default to ingest
+  }
+
+  return 0;
+}
+
+/**
+ * Get the desk index for a CA pipeline phase (1-7) or done seat (8).
+ * Returns -1 if not enough desks or phase out of range.
+ */
+function getCAPhaseDesk(phase) {
+  if (phase < 1 || phase > 8) return -1;
+  var idx = phase - 1; // 0-based
+  return (idx < caPhaseDeskIndices.length) ? caPhaseDeskIndices[idx] : -1;
+}
+
+/**
+ * Get the CA done seat desk index.
+ * Returns -1 — no dedicated done seat (agent goes to lounge with confetti).
+ */
+function getCADoneSeatDesk() {
+  return -1;
+}
+
 // ─── Trait-based desk system ───
 // Each desk gets traits based on spatial position. Agents request desks by trait.
 // Traits: 'dev' (general work), 'pipeline' (content/CA), 'qa' (audit/verify)
@@ -152,6 +307,11 @@ function partitionDesksByRoom(deskCoords) {
 
   console.log('[Pipeline] Desk traits assigned — dev:', roomDesks.command.length,
     'pipeline:', roomDesks.content.length, 'qa:', roomDesks.qa.length);
+
+  // Assign CA phase desks after trait partitioning
+  if (typeof assignCAPhaseDeskIndices === 'function') {
+    assignCAPhaseDeskIndices();
+  }
 }
 
 /**
@@ -255,6 +415,203 @@ function getRoomDisplayName(room) {
 function getStageDisplayName(stage) {
   var names = ['Scrape/Fetch', 'Process/Group', 'Generate', 'Ship/Promote'];
   return (stage >= 0 && stage < names.length) ? names[stage] : null;
+}
+
+/**
+ * Get CA phase display name for UI.
+ * @param {number} phase - 1-7
+ */
+function getCAPhaseDisplayName(phase) {
+  if (phase < 1 || phase > CA_PHASE_DEFS.length) return null;
+  return CA_PHASE_DEFS[phase - 1].label;
+}
+
+/**
+ * Get desk label for a given desk index (for rendering on laptops).
+ * Returns null if no label assigned.
+ */
+function getDeskLabel(deskIndex) {
+  return caDeskLabels[deskIndex] || null;
+}
+
+/**
+ * Manually set a CA agent's phase (called from dashboard or hook events).
+ * Updates the character's caPhase, reassigns desk, and refreshes tracker.
+ * @param {string} agentName - e.g. 'CApipe'
+ * @param {number} phase - 1-7 or 8 for done
+ */
+function setCAPhase(agentName, phase) {
+  if (typeof officeCharacters === 'undefined') return;
+  var chars = officeCharacters.getCharacterArray();
+  for (var i = 0; i < chars.length; i++) {
+    var c = chars[i];
+    if (c.role === agentName || (c.metadata && c.metadata.name === agentName)) {
+      c.caPhase = phase;
+      if (phase >= 1 && phase <= CA_PHASE_DEFS.length) {
+        officeCharacters.assignDesk(c.id);
+      } else if (phase >= CA_DONE_PHASE) {
+        // Done — release desk, agent walks to lounge with confetti
+        officeCharacters.releaseDesk(c.id);
+        if (typeof officeRenderer !== 'undefined') {
+          officeRenderer.spawnEffect('confetti', c.x, c.y - 45);
+        }
+      }
+      if (typeof updateCAPipelineTracker === 'function') updateCAPipelineTracker();
+      // Persist to server so page reloads keep the state (use the actual caPhase which may be higher)
+      _persistCAPhase(c.caPhase);
+      break;
+    }
+  }
+}
+
+/** Persist CA phase to dashboard server (survives page reloads) */
+function _persistCAPhase(phase) {
+  try {
+    fetch('/api/pipeline-status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'phase-' + phase, detail: 'phase-' + phase, agentId: '_ca_pipeline' }),
+    });
+  } catch (e) { /* best effort */ }
+}
+
+/** Restore CA phase from server on page load. Call after agents are loaded. */
+function restoreCAPhaseFromServer() {
+  fetch('/api/pipeline-status').then(function (r) { return r.json(); }).then(function (data) {
+    var entry = data['_ca_pipeline'] || data._ca_pipeline;
+    if (!entry) return;
+    var m = (entry.status || '').match(/phase-(\d+)/);
+    if (!m) return;
+    var phase = parseInt(m[1]);
+    if (phase < 1) return;
+    // Find CApipe agent and restore phase
+    if (typeof officeCharacters === 'undefined') return;
+    var chars = officeCharacters.getCharacterArray();
+    for (var i = 0; i < chars.length; i++) {
+      if (/capipe|ca-pipe|ca_pipe/i.test(chars[i].role || '')) {
+        chars[i].caPhase = phase;
+        // Only assign desk for active phases, not done
+        if (phase >= 1 && phase < CA_DONE_PHASE) {
+          officeCharacters.assignDesk(chars[i].id);
+        }
+        if (typeof updateCAPipelineTracker === 'function') updateCAPipelineTracker();
+        break;
+      }
+    }
+  }).catch(function () { /* best effort */ });
+}
+
+// ─── CA Pipeline Sidebar Tracker ───
+
+/**
+ * Update the CA pipeline tracker in the sidebar.
+ * Scans all characters for CA pipeline agents and renders phase checkboxes.
+ * Called on every agent update.
+ */
+function updateCAPipelineTracker() {
+  var dateEl = document.getElementById('caTrackerDate');
+  var phasesEl = document.getElementById('caTrackerPhases');
+  if (!dateEl || !phasesEl) return;
+
+  // Find any CA pipeline agent
+  if (typeof officeCharacters === 'undefined') return;
+  var chars = officeCharacters.getCharacterArray();
+  var caAgent = null;
+  for (var i = 0; i < chars.length; i++) {
+    if (chars[i].caPhase > 0) { caAgent = chars[i]; break; }
+  }
+
+  // Check persisted pipeline status (survives page reloads)
+  var persistedPhase = 0;
+  if (typeof pipelineStatusCache !== 'undefined' && pipelineStatusCache._ca_pipeline) {
+    var ps = pipelineStatusCache._ca_pipeline;
+    var pm = (ps.status || '').match(/phase-(\d+)/);
+    if (pm) persistedPhase = parseInt(pm[1]);
+  }
+
+  if (!caAgent) {
+    // No active CA agent — check if there's a completed run persisted
+    if (persistedPhase >= CA_DONE_PHASE) {
+      dateEl.textContent = new Date().toISOString().slice(0, 10) + ' \u2713';
+      dateEl.className = 'ca-tracker-date done';
+      while (phasesEl.firstChild) phasesEl.removeChild(phasesEl.firstChild);
+      return;
+    }
+    // Show active phases from persisted state even without agent
+    if (persistedPhase >= 1) {
+      dateEl.textContent = new Date().toISOString().slice(0, 10);
+      dateEl.className = 'ca-tracker-date active';
+      // Fall through to render phases using persistedPhase
+    } else {
+      dateEl.textContent = 'No active run';
+      dateEl.className = 'ca-tracker-date';
+      while (phasesEl.firstChild) phasesEl.removeChild(phasesEl.firstChild);
+      return;
+    }
+  }
+
+  // Show date
+  var today = new Date();
+  var dateStr = today.getFullYear() + '-' +
+    String(today.getMonth() + 1).padStart(2, '0') + '-' +
+    String(today.getDate()).padStart(2, '0');
+  dateEl.textContent = dateStr;
+  dateEl.className = 'ca-tracker-date active';
+
+  // Use the HIGHER of character phase and persisted phase (never regress)
+  var currentPhase = caAgent ? Math.max(caAgent.caPhase || 0, persistedPhase) : persistedPhase;
+  var agentState = caAgent ? caAgent.agentState : 'idle';
+
+  // Build phase rows using DOM methods (no innerHTML)
+  while (phasesEl.firstChild) phasesEl.removeChild(phasesEl.firstChild);
+
+  var isDone = (currentPhase >= CA_DONE_PHASE);
+
+  // Collapse when complete — just show date + checkmark
+  if (isDone) {
+    dateEl.textContent = dateStr + ' \u2713';
+    dateEl.className = 'ca-tracker-date done';
+    while (phasesEl.firstChild) phasesEl.removeChild(phasesEl.firstChild);
+    return;
+  }
+
+  var allPhases = CA_PHASE_DEFS.concat([{ phase: CA_DONE_PHASE, label: 'Done' }]);
+  for (var p = 0; p < allPhases.length; p++) {
+    var phaseNum = allPhases[p].phase;
+    var label = allPhases[p].label;
+
+    var row = document.createElement('div');
+    row.className = 'ca-phase-row';
+
+    var check = document.createElement('div');
+    check.className = 'ca-phase-check';
+
+    var labelSpan = document.createElement('span');
+    labelSpan.className = 'ca-phase-label';
+    labelSpan.textContent = label;
+
+    if (isDone) {
+      // All done — every phase checked
+      row.className += ' done';
+      check.textContent = '\u2713';
+    } else if (phaseNum < currentPhase) {
+      row.className += ' done';
+      check.textContent = '\u2713';
+    } else if (phaseNum === currentPhase) {
+      if (agentState === 'error' || agentState === 'help') {
+        row.className += ' error';
+        check.textContent = '\u2715';
+      } else {
+        row.className += ' active';
+        check.textContent = '\u25B8';
+      }
+    }
+    // Future phases stay dim (default class)
+
+    row.appendChild(check);
+    row.appendChild(labelSpan);
+    phasesEl.appendChild(row);
+  }
 }
 
 // ─── Internal ───

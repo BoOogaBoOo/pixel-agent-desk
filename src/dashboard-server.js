@@ -408,6 +408,19 @@ function handleSetPipelineStatus(req, res) {
       const entry = { status: status.slice(0, 60), detail: (detail || '').slice(0, 120), timestamp: Date.now() };
       // If agentId provided, store per-agent. Otherwise broadcast as global.
       const key = agentId || '_global';
+      // CA pipeline: never regress phase number
+      if (key === '_ca_pipeline') {
+        const existing = pipelineStatuses.get(key);
+        if (existing) {
+          const oldMatch = (existing.status || '').match(/phase-(\d+)/);
+          const newMatch = (entry.status || '').match(/phase-(\d+)/);
+          if (oldMatch && newMatch && parseInt(newMatch[1]) < parseInt(oldMatch[1])) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, skipped: 'phase-regression' }));
+            return;
+          }
+        }
+      }
       pipelineStatuses.set(key, entry);
       broadcastSSE('pipeline.status', { key, ...entry });
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -559,8 +572,23 @@ function startServer() {
   // Error handling
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
-      console.error(`[Dashboard Server] ❌ Port ${PORT} already in use!`);
-      console.error('[Dashboard Server] 💡 Another server is already running on this port.');
+      console.error(`[Dashboard Server] Port ${PORT} in use — killing stale process and retrying...`);
+      const { execFileSync } = require('child_process');
+      try {
+        const out = execFileSync('netstat', ['-ano'], { encoding: 'utf8', timeout: 3000 });
+        const portPattern = new RegExp(`:${PORT}\\s.*LISTENING\\s+(\\d+)`);
+        const match = out.match(portPattern);
+        if (match) {
+          const stalePid = parseInt(match[1], 10);
+          if (stalePid !== process.pid) {
+            execFileSync('taskkill', ['/PID', String(stalePid), '/F'], { timeout: 3000 });
+            console.error(`[Dashboard Server] Killed stale PID ${stalePid}, retrying bind...`);
+            setTimeout(() => server.listen(PORT), 500);
+          }
+        }
+      } catch (killErr) {
+        console.error(`[Dashboard Server] Could not recover port ${PORT}:`, killErr.message);
+      }
     } else {
       console.error('[Dashboard Server] ❌ Server error:', err);
     }
